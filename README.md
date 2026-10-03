@@ -1,4 +1,4 @@
-# gns3fy (Rust)
+# gns3fy-rs
 
 Rust wrapper around the [GNS3 server REST API](http://api.gns3.net/en/2.2/index.html) (GNS3 2.2+),
 a port of the Python [`gns3fy`](https://github.com/davidban77/gns3fy) library. Use it to drive a GNS3

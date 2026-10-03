@@ -1,9 +1,10 @@
 [package]
-name = "gns3fy"
+name = "gns3fy-rs"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Rust wrapper around the GNS3 server REST API (port of the Python gns3fy library)"
+homepage = "https://github.com/Julien-cpsn/gns3fy-rs"
 license = "MIT"
 keywords = ["gns3", "networking", "api", "rest", "emulation"]
 categories = ["api-bindings", "network-programming"]

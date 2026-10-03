@@ -146,9 +146,9 @@ impl Gns3ConnectorBuilder {
 ///
 /// ```no_run
 /// use std::sync::Arc;
-/// use gns3fy::Gns3Connector;
+/// use gns3fy_rs::Gns3Connector;
 ///
-/// # fn main() -> gns3fy::Result<()> {
+/// # fn main() -> gns3fy_rs::Result<()> {
 /// let server = Arc::new(Gns3Connector::new("http://localhost:3080")?);
 /// println!("{:?}", server.get_version()?);
 /// # Ok(()) }

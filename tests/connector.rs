@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use gns3fy::{Error, Gns3Connector, Lookup, LOCAL_COMPUTE};
+use gns3fy_rs::{Error, Gns3Connector, Lookup, LOCAL_COMPUTE};
 use serde_json::json;
 
 fn connector(server: &MockServer) -> Gns3Connector {

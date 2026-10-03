@@ -34,12 +34,40 @@ fn main() -> gns3fy::Result<()> {
 
 Run the bundled walkthrough with `cargo run --example lab -- http://localhost:3080 API_TEST`.
 
+### Templates
+
+`Template` models a GNS3 template. Common fields are typed; type-specific settings (`ram`, `image`,
+`hda_disk_image`, `start_command`, ...) are kept in `properties`, so nothing is lost on a round trip.
+
+```rust
+use gns3fy::{ConsoleType, Lookup, Template, TemplateType};
+
+// list / look up
+for t in Template::list(&server)? { println!("{:?} {:?}", t.name, t.template_type); }
+let mut alpine = Template::find(&server, Lookup::Name("alpine"))?.expect("exists");
+
+// edit locally, send the whole template back
+alpine.set_property("start_command", "sh");
+alpine.save()?;                                   // or: alpine.update(json!({"start_command": "sh"}))?
+
+// create / delete
+let mut t = Template::new(server.clone(), "my-alpine", TemplateType::Docker)
+    .with_property("image", "alpine:latest")
+    .with_property("adapters", 2);
+t.console_type = Some(ConsoleType::Telnet);
+t.create()?;
+t.delete()?;
+```
+
+Built-in templates (cloud, NAT, VPCS, switches...) are refused locally by `save`, `update` and `delete`,
+since the server does not allow changing them.
+
 ## Python → Rust mapping
 
 | Python | Rust |
 |---|---|
 | `Gns3Connector(url, user, cred, verify, api_version)` | `Gns3Connector::new(url)` / `Gns3Connector::builder(url).user(..).cred(..).verify(..).api_version(..).build()` |
-| `Project`, `Node`, `Link` (pydantic dataclasses) | `Project`, `Node`, `Link` structs, `Default` + `with_*` builders; share the connector with `Arc` |
+| `Project`, `Node`, `Link` (pydantic dataclasses); templates were plain dicts | `Project`, `Node`, `Link`, `Template` structs with `Default` + `with_*` builders; share the connector with `Arc` |
 | `name=` / `project_id=` / `template_id=` keyword pairs | `Lookup::Name(..)` / `Lookup::Id(..)` |
 | `update(**kwargs)`, `create_template(**kwargs)` | take a `serde_json::Value` object: `node.update(json!({"x": 10}))?` |
 | `*_summary(is_print=...)` | return `Vec` of typed rows; rows implement `Display` (same text the Python version printed) |

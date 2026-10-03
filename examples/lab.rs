@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use gns3fy::{Gns3Connector, Lookup, Project};
+use gns3fy_rs::{Gns3Connector, Lookup, Project};
 
-fn main() -> gns3fy::Result<()> {
+fn main() -> gns3fy_rs::Result<()> {
     let mut args = std::env::args().skip(1);
     let url = args.next().unwrap_or_else(|| "http://localhost:3080".into());
     let project_name = args.next().unwrap_or_else(|| "API_TEST".into());

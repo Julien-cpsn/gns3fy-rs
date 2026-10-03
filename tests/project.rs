@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
-use gns3fy::{
+use gns3fy_rs::{
     ConsoleType, Error, Gns3Connector, Lookup, NodeStatus, NodeType, Project, ProjectStatus,
 };
 use serde_json::json;
@@ -291,7 +291,7 @@ fn create_node_from_template() {
         .on("PUT", &format!("{p}/nodes/new-node"), 200, created.to_string())
         .start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
-    let node = gns3fy::Node::default().with_name("alpine-2").with_template("alpine");
+    let node = gns3fy_rs::Node::default().with_name("alpine-2").with_template("alpine");
     let created = lab.create_node(node).unwrap();
     assert_eq!(created.node_id.as_deref(), Some("new-node"));
     assert_eq!(created.status, Some(NodeStatus::Stopped));

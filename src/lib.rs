@@ -6,9 +6,9 @@
 //!
 //! ```no_run
 //! use std::sync::Arc;
-//! use gns3fy::{Gns3Connector, Lookup, Project};
+//! use gns3fy_rs::{Gns3Connector, Lookup, Project};
 //!
-//! # fn main() -> gns3fy::Result<()> {
+//! # fn main() -> gns3fy_rs::Result<()> {
 //! let server = Arc::new(Gns3Connector::new("http://localhost:3080")?);
 //!
 //! let mut lab = Project::with_connector(server.clone()).with_name("API_TEST");
@@ -34,6 +34,7 @@ pub mod error;
 pub mod link;
 pub mod node;
 pub mod project;
+pub mod template;
 pub mod types;
 
 pub use connector::{
@@ -44,7 +45,8 @@ pub use error::{Error, Result};
 pub use link::Link;
 pub use node::Node;
 pub use project::{LinkSummary, NodeInventory, NodeSummary, Project, DEFAULT_POLL_WAIT};
+pub use template::Template;
 pub use types::{
     ConsoleType, Drawing, LinkEndpoint, LinkType, Lookup, NodeStatus, NodeType, Port,
-    ProjectStats, ProjectStatus, Snapshot,
+    ProjectStats, ProjectStatus, Snapshot, TemplateType,
 };

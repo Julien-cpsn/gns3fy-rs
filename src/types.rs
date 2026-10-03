@@ -46,6 +46,47 @@ string_enum!(
 );
 
 string_enum!(
+    /// Valid GNS3 template types (same wire values as [`NodeType`]).
+    TemplateType {
+        Cloud => "cloud",
+        Nat => "nat",
+        EthernetHub => "ethernet_hub",
+        EthernetSwitch => "ethernet_switch",
+        FrameRelaySwitch => "frame_relay_switch",
+        AtmSwitch => "atm_switch",
+        Docker => "docker",
+        Dynamips => "dynamips",
+        Vpcs => "vpcs",
+        Traceng => "traceng",
+        Virtualbox => "virtualbox",
+        Vmware => "vmware",
+        Iou => "iou",
+        Qemu => "qemu",
+    }
+);
+
+impl From<TemplateType> for NodeType {
+    fn from(t: TemplateType) -> Self {
+        match t {
+            TemplateType::Cloud => NodeType::Cloud,
+            TemplateType::Nat => NodeType::Nat,
+            TemplateType::EthernetHub => NodeType::EthernetHub,
+            TemplateType::EthernetSwitch => NodeType::EthernetSwitch,
+            TemplateType::FrameRelaySwitch => NodeType::FrameRelaySwitch,
+            TemplateType::AtmSwitch => NodeType::AtmSwitch,
+            TemplateType::Docker => NodeType::Docker,
+            TemplateType::Dynamips => NodeType::Dynamips,
+            TemplateType::Vpcs => NodeType::Vpcs,
+            TemplateType::Traceng => NodeType::Traceng,
+            TemplateType::Virtualbox => NodeType::Virtualbox,
+            TemplateType::Vmware => NodeType::Vmware,
+            TemplateType::Iou => NodeType::Iou,
+            TemplateType::Qemu => NodeType::Qemu,
+        }
+    }
+}
+
+string_enum!(
     /// Valid node console types.
     ConsoleType {
         Vnc => "vnc",

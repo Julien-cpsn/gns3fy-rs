@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use gns3fy::{
+use gns3fy_rs::{
     ConsoleType, Error, Gns3Connector, Link, LinkType, Node, NodeStatus, NodeType, Port,
 };
 use serde_json::{json, Value};

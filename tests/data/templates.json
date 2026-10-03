@@ -72,7 +72,6 @@
         "kernel_image": "",
         "legacy_networking": false,
         "linked_clone": true,
-        "mac_address": null,
         "name": "vEOS",
         "on_close": "power_off",
         "options": "-nographic",

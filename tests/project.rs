@@ -4,9 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
-use gns3fy_rs::{
-    ConsoleType, Error, Gns3Connector, Lookup, NodeStatus, NodeType, Project, ProjectStatus,
-};
+use gns3fy_rs::{ConsoleType, Error, Gns3Connector, Lookup, NodeStatus, NodeType, Project, ProjectStatus, ProjectUpdate};
 use serde_json::json;
 
 const ZERO: Duration = Duration::from_millis(0);
@@ -162,7 +160,11 @@ fn lifecycle_open_close_update_delete() {
     assert_eq!(lab.status, Some(ProjectStatus::Closed));
     lab.open().unwrap();
     assert_eq!(lab.status, Some(ProjectStatus::Opened));
-    lab.update(json!({"auto_close": true})).unwrap();
+    let patch = ProjectUpdate {
+        auto_close: Some(true),
+        ..Default::default()
+    };
+    lab.update(&patch).unwrap();
     assert_eq!(lab.auto_close, Some(true));
     assert_eq!(server.last_json("PUT", &p), json!({"auto_close": true}));
     lab.delete().unwrap();

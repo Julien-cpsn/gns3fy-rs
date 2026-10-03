@@ -4,46 +4,74 @@ use std::sync::Arc;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use crate::connector::{Body, Gns3Connector, LOCAL_COMPUTE};
 use crate::error::{Error, Result};
 use crate::link::Link;
-use crate::types::{ConsoleType, Lookup, NodeStatus, NodeType, Port};
-use crate::util::{merge_update, payload, str_field};
+use crate::properties::NodeProperties;
+use crate::types::{ConsoleType, CustomAdapter, Label, Lookup, NodeStatus, NodeType, Port};
+use crate::util::merge_some;
 
 /// A node (device) of a project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Node {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
     pub compute_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub node_type: Option<NodeType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub node_directory: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<NodeStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ports: Option<Vec<Port>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub port_name_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub port_segment_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub first_port_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
-    pub label: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<Label>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub console: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub console_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub console_type: Option<ConsoleType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub console_auto_start: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command_line: Option<String>,
-    pub custom_adapters: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_adapters: Option<Vec<CustomAdapter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub x: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub z: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub template_id: Option<String>,
-    pub properties: Option<Value>,
+    /// Emulator specific settings (`ram`, `image`, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<NodeProperties>,
     /// Template *name*, used by [`Node::create`] to find `template_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
     /// Links attached to this node (filled by [`Node::get_links`]).
     #[serde(skip)]
@@ -87,6 +115,88 @@ impl Default for Node {
             connector: None,
         }
     }
+}
+
+/// The attributes of a node that can be changed on the server; `None` fields are left as
+/// they are.
+///
+/// ```
+/// use gns3fy_rs::{NodeProperties, NodeUpdate};
+///
+/// let patch = NodeUpdate {
+///     x: Some(100),
+///     y: Some(-50),
+///     properties: Some(NodeProperties { ram: Some(1024), ..Default::default() }),
+///     ..Default::default()
+/// };
+/// assert_eq!(patch.x, Some(100));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<Label>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console_type: Option<ConsoleType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console_auto_start: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_port_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_name_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_segment_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_adapters: Option<Vec<CustomAdapter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<NodeProperties>,
+}
+
+impl From<&Node> for NodeUpdate {
+    /// The user-settable attributes of a node, as a patch.
+    fn from(n: &Node) -> Self {
+        NodeUpdate {
+            name: n.name.clone(),
+            compute_id: Some(n.compute_id.clone()),
+            x: n.x,
+            y: n.y,
+            z: n.z,
+            locked: n.locked,
+            label: n.label.clone(),
+            symbol: n.symbol.clone(),
+            console: n.console,
+            console_type: n.console_type,
+            console_auto_start: n.console_auto_start,
+            first_port_name: n.first_port_name.clone(),
+            port_name_format: n.port_name_format.clone(),
+            port_segment_size: n.port_segment_size,
+            custom_adapters: n.custom_adapters.clone(),
+            properties: n.properties.clone(),
+        }
+    }
+}
+
+/// Body of `POST /projects/{id}/templates/{template_id}`.
+#[derive(Serialize)]
+struct FromTemplateRequest<'a> {
+    x: i64,
+    y: i64,
+    compute_id: &'a str,
 }
 
 impl Node {
@@ -133,12 +243,16 @@ impl Node {
         self.ports.as_ref()?.iter().find(|p| p.name == name)
     }
 
-    fn apply(&mut self, data: &Value) -> Result<()> {
-        let mut new: Node = merge_update(&*self, data)?;
-        new.links = std::mem::take(&mut self.links);
-        new.connector = self.connector.take();
-        *self = new;
-        Ok(())
+    /// Overlay the fields present in a server answer on this object.
+    fn apply(&mut self, new: Node) {
+        self.compute_id = new.compute_id;
+        merge_some!(
+            self, new;
+            name, project_id, node_id, node_type, node_directory, status, ports,
+            port_name_format, port_segment_size, first_port_name, locked, label, console,
+            console_host, console_type, console_auto_start, command_line, custom_adapters,
+            height, width, symbol, x, y, z, template_id, properties, template
+        );
     }
 
     /// Connector, project id and node id; resolves `node_id` from `name` when missing.
@@ -153,15 +267,15 @@ impl Node {
                 .name
                 .clone()
                 .ok_or_else(|| Error::invalid("Need to either submit node_id or name"))?;
-            let nodes = conn.get_nodes(&pid)?;
-            let ids: Vec<&str> = nodes
-                .iter()
-                .filter(|n| str_field(n, "name") == Some(name.as_str()))
-                .filter_map(|n| str_field(n, "node_id"))
+            let ids: Vec<String> = conn
+                .get_nodes(&pid)?
+                .into_iter()
+                .filter(|n| n.name.as_deref() == Some(name.as_str()))
+                .filter_map(|n| n.node_id)
                 .collect();
             match ids.as_slice() {
                 [] => return Err(Error::not_found(format!("Node not found: {name}"))),
-                [id] => self.node_id = Some((*id).to_string()),
+                [id] => self.node_id = Some(id.clone()),
                 _ => {
                     return Err(Error::invalid(
                         "Multiple nodes found with same name. Need to submit node_id",
@@ -181,8 +295,8 @@ impl Node {
     /// Like [`get`](Node::get), optionally skipping the links request.
     pub fn get_with_links(&mut self, get_links: bool) -> Result<()> {
         let (conn, pid, nid) = self.require()?;
-        let data = conn.call_json(Method::GET, &format!("/projects/{pid}/nodes/{nid}"), Body::Empty)?;
-        self.apply(&data)?;
+        let data: Node = conn.call_json(Method::GET, &format!("/projects/{pid}/nodes/{nid}"), Body::Empty)?;
+        self.apply(data);
         if get_links {
             self.get_links()?;
         }
@@ -192,17 +306,13 @@ impl Node {
     /// Retrieves the links attached to this node.
     pub fn get_links(&mut self) -> Result<()> {
         let (conn, pid, nid) = self.require()?;
-        let data = conn.call_json(
+        let mut links: Vec<Link> = conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/nodes/{nid}/links"),
             Body::Empty,
         )?;
-        let raw: Vec<Value> = serde_json::from_value(data)?;
-        let mut links = Vec::with_capacity(raw.len());
-        for l in raw {
-            let mut link: Link = serde_json::from_value(l)?;
+        for link in &mut links {
             link.connector = Some(conn.clone());
-            links.push(link);
         }
         self.links = links;
         Ok(())
@@ -210,45 +320,47 @@ impl Node {
 
     /// POST an action (`start`, `stop`, `reload`, `suspend`); update from the answer when
     /// it already reports the expected status, otherwise re-fetch the node.
-    fn action(&mut self, action: &str, expected: &str) -> Result<()> {
+    fn action(&mut self, action: &str, expected: NodeStatus) -> Result<()> {
         let (conn, pid, nid) = self.require()?;
-        let data = conn.call_json(
+        let data: Node = conn.call_json(
             Method::POST,
             &format!("/projects/{pid}/nodes/{nid}/{action}"),
             Body::Empty,
         )?;
-        if str_field(&data, "status") == Some(expected) {
-            self.apply(&data)
+        if data.status == Some(expected) {
+            self.apply(data);
+            Ok(())
         } else {
             self.get()
         }
     }
 
     pub fn start(&mut self) -> Result<()> {
-        self.action("start", "started")
+        self.action("start", NodeStatus::Started)
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        self.action("stop", "stopped")
+        self.action("stop", NodeStatus::Stopped)
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        self.action("reload", "started")
+        self.action("reload", NodeStatus::Started)
     }
 
     pub fn suspend(&mut self) -> Result<()> {
-        self.action("suspend", "suspended")
+        self.action("suspend", NodeStatus::Suspended)
     }
 
-    /// Updates the node on the server with the given JSON fields.
-    pub fn update(&mut self, fields: Value) -> Result<()> {
+    /// Updates the node on the server with the `Some` fields of `patch`.
+    pub fn update(&mut self, patch: &NodeUpdate) -> Result<()> {
         let (conn, pid, nid) = self.require()?;
-        let data = conn.call_json(
+        let data: Node = conn.call_json(
             Method::PUT,
             &format!("/projects/{pid}/nodes/{nid}"),
-            Body::Json(fields),
+            Body::json(patch)?,
         )?;
-        self.apply(&data)
+        self.apply(data);
+        Ok(())
     }
 
     /// Creates the node from a template (`template` name or `template_id`), then applies
@@ -270,20 +382,21 @@ impl Node {
             let template = conn
                 .get_template(Lookup::Name(&name))?
                 .ok_or_else(|| Error::invalid(format!("Template {name} not found")))?;
-            self.template_id = str_field(&template, "template_id").map(String::from);
+            self.template_id = template.template_id;
         }
-        let cached = payload(
-            &*self,
-            &["project_id", "template", "template_id", "links", "connector"],
-        )?;
+        let cached = NodeUpdate::from(&*self);
         let template_id = self.template_id.clone().unwrap_or_default();
-        let data = conn.call_json(
+        let created: Node = conn.call_json(
             Method::POST,
             &format!("/projects/{pid}/templates/{template_id}"),
-            Body::Json(json!({"x": 0, "y": 0, "compute_id": self.compute_id})),
+            Body::json(&FromTemplateRequest {
+                x: 0,
+                y: 0,
+                compute_id: &self.compute_id,
+            })?,
         )?;
-        self.apply(&data)?;
-        self.update(cached)
+        self.apply(created);
+        self.update(&cached)
     }
 
     /// Deletes the node on the server and clears `project_id`, `node_id` and `name`.

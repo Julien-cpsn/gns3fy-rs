@@ -3,9 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use gns3fy_rs::{
-    ConsoleType, Error, Gns3Connector, Link, LinkType, Node, NodeStatus, NodeType, Port,
-};
+use gns3fy_rs::{ConsoleType, Error, Gns3Connector, Link, LinkType, LinkUpdate, Node, NodeStatus, NodeType, NodeUpdate, Port};
 use serde_json::{json, Value};
 
 fn conn(server: &MockServer) -> Arc<Gns3Connector> {
@@ -138,7 +136,12 @@ fn node_update_and_delete() {
         .on("DELETE", &node_path(), 204, "")
         .start();
     let mut node = Node::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_node_id(ALPINE_ID);
-    node.update(json!({"x": 42})).unwrap();
+
+    let patch = NodeUpdate {
+        x: Some(42),
+        ..Default::default()
+    };
+    node.update(&patch).unwrap();
     assert_eq!(node.x, Some(42));
     assert_eq!(server.last_json("PUT", &node_path()), json!({"x": 42}));
     node.delete().unwrap();
@@ -236,9 +239,15 @@ fn link_get_update_delete() {
     let nodes = link.nodes.as_ref().unwrap();
     assert_eq!(nodes.len(), 2);
     assert_eq!(nodes[1].node_id, ALPINE_ID);
-    assert_eq!(link.link_style.as_ref().unwrap()["color"], "#75507b");
+    assert_eq!(link.link_style.as_ref().unwrap().color.as_ref().unwrap().as_str(), "#75507b");
 
-    link.update(json!({"suspend": true})).unwrap();
+    let patch = LinkUpdate {
+        filters: None,
+        link_style: None,
+        nodes: None,
+        suspend: Some(true),
+    };
+    link.update(&patch).unwrap();
     assert_eq!(link.suspend, Some(true));
     assert_eq!(server.last_json("PUT", &link_path()), json!({"suspend": true}));
 
@@ -289,7 +298,12 @@ fn invalid_enum_values_are_rejected() {
     let server = Routes::new().on("PUT", &node_path(), 200, r#"{"status": "exploded"}"#).start();
     let mut node = Node::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_node_id(ALPINE_ID);
     node.status = Some(NodeStatus::Started);
-    assert!(matches!(node.update(json!({"x": 1})), Err(Error::Json(_))));
+
+    let patch = NodeUpdate {
+        x: Some(1),
+        ..Default::default()
+    };
+    assert!(matches!(node.update(&patch), Err(Error::Json(_))));
     assert_eq!(node.status, Some(NodeStatus::Started), "failed update leaves the node untouched");
     assert!(node.connector.is_some());
 }
@@ -333,6 +347,6 @@ fn every_fixture_node_and_link_deserializes_and_ports_keep_unknown_fields() {
     let port: Port = serde_json::from_value(json!({
         "name": "e0", "port_number": 0, "adapter_number": 1, "mac_address": "aa:bb"
     })).unwrap();
-    assert_eq!(port.extra["mac_address"], "aa:bb");
+    assert_eq!(port.mac_address.as_ref().unwrap().as_str(), "aa:bb");
     assert_eq!(serde_json::to_value(&port).unwrap()["mac_address"], "aa:bb");
 }

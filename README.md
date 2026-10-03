@@ -1,6 +1,6 @@
 # gns3fy-rs
 
-Rust wrapper around the [GNS3 server REST API](http://api.gns3.net/en/2.2/index.html) (GNS3 2.2+),
+Rust wrapper around the [GNS3 server REST API](http://api.gns3.net/en/2.2/index.html) (GNS3 2.2),
 a port of the Python [`gns3fy`](https://github.com/davidban77/gns3fy) library. Use it to drive a GNS3
 server from scripts, tooling and network CI/CD pipelines.
 
@@ -17,7 +17,7 @@ fn main() -> gns3fy::Result<()> {
     let server = Arc::new(Gns3Connector::new("http://localhost:3080")?);
 
     let mut lab = Project::with_connector(server.clone()).with_name("API_TEST");
-    lab.get()?;   // project + stats + snapshots + drawings + nodes + links
+    lab.get()?;   // project  stats  snapshots  drawings  nodes  links
     lab.open()?;
 
     for node in lab.nodes_summary()? { println!("{node}"); }
@@ -40,10 +40,10 @@ Run the bundled walkthrough with `cargo run --example lab -- http://localhost:30
 `hda_disk_image`, `start_command`, ...) are kept in `properties`, so nothing is lost on a round trip.
 
 ```rust
-use gns3fy::{ConsoleType, Lookup, Template, TemplateType};
+use gns3fy::{ConsoleType, Lookup, Template, TemplateKind};
 
 // list / look up
-for t in Template::list(&server)? { println!("{:?} {:?}", t.name, t.template_type); }
+for t in Template::list(&server)? { println!("{:?} {:?}", t.name, t.kind); }
 let mut alpine = Template::find(&server, Lookup::Name("alpine"))?.expect("exists");
 
 // edit locally, send the whole template back
@@ -51,9 +51,10 @@ alpine.set_property("start_command", "sh");
 alpine.save()?;                                   // or: alpine.update(json!({"start_command": "sh"}))?
 
 // create / delete
-let mut t = Template::new(server.clone(), "my-alpine", TemplateType::Docker)
-    .with_property("image", "alpine:latest")
-    .with_property("adapters", 2);
+let mut docker_template = DockerTemplate::default();
+docker_template.image = Some(String::from("alpine:latest"));
+docker_template.adapters = Some(2);
+let mut t = Template::new(server.clone(), "my-alpine", TemplateKind::Docker(docker_template));
 t.console_type = Some(ConsoleType::Telnet);
 t.create()?;
 t.delete()?;
@@ -67,7 +68,7 @@ since the server does not allow changing them.
 | Python | Rust |
 |---|---|
 | `Gns3Connector(url, user, cred, verify, api_version)` | `Gns3Connector::new(url)` / `Gns3Connector::builder(url).user(..).cred(..).verify(..).api_version(..).build()` |
-| `Project`, `Node`, `Link` (pydantic dataclasses); templates were plain dicts | `Project`, `Node`, `Link`, `Template` structs with `Default` + `with_*` builders; share the connector with `Arc` |
+| `Project`, `Node`, `Link` (pydantic dataclasses); templates were plain dicts | `Project`, `Node`, `Link`, `Template` structs with `Default`  `with_*` builders; share the connector with `Arc` |
 | `name=` / `project_id=` / `template_id=` keyword pairs | `Lookup::Name(..)` / `Lookup::Id(..)` |
 | `update(**kwargs)`, `create_template(**kwargs)` | take a `serde_json::Value` object: `node.update(json!({"x": 10}))?` |
 | `*_summary(is_print=...)` | return `Vec` of typed rows; rows implement `Display` (same text the Python version printed) |

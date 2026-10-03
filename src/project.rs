@@ -8,17 +8,17 @@ use std::time::Duration;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use crate::connector::{Body, Gns3Connector};
 use crate::error::{Error, Result};
 use crate::link::Link;
 use crate::node::Node;
+use crate::node::NodeUpdate;
 use crate::types::{
-    ConsoleType, Drawing, LinkEndpoint, Lookup, NodeType, Port, ProjectStats, ProjectStatus,
-    Snapshot,
+    ConsoleType, Drawing, Label, LinkEndpoint, Lookup, NodeType, Port, ProjectStats,
+    ProjectStatus, Snapshot, Supplier, Variable,
 };
-use crate::util::{merge_update, payload, str_field};
+use crate::util::merge_some;
 
 /// Default wait between a bulk node action (start/stop/...) and the node refresh.
 pub const DEFAULT_POLL_WAIT: Duration = Duration::from_secs(5);
@@ -27,27 +27,49 @@ pub const DEFAULT_POLL_WAIT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Project {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<ProjectStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_start: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_close: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_open: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub drawing_grid_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grid_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_width: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub show_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub show_interface_labels: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub show_layers: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub snap_to_grid: Option<bool>,
-    pub supplier: Option<Value>,
-    pub variables: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplier: Option<Supplier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables: Option<Vec<Variable>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stats: Option<ProjectStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshots: Option<Vec<Snapshot>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub drawings: Option<Vec<Drawing>>,
     #[serde(skip)]
     pub nodes: Vec<Node>,
@@ -55,6 +77,69 @@ pub struct Project {
     pub links: Vec<Link>,
     #[serde(skip)]
     pub connector: Option<Arc<Gns3Connector>>,
+}
+
+/// The settings of a project that can be changed on the server; `None` fields are left as
+/// they are.
+///
+/// ```
+/// use gns3fy_rs::ProjectUpdate;
+///
+/// let patch = ProjectUpdate { auto_close: Some(true), zoom: Some(80), ..Default::default() };
+/// assert_eq!(patch.zoom, Some(80));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_close: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_open: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_start: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drawing_grid_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_width: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_interface_labels: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_layers: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snap_to_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplier: Option<Supplier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables: Option<Vec<Variable>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<i64>,
+}
+
+/// Body of `POST .../snapshots`.
+#[derive(Serialize)]
+struct SnapshotRequest<'a> {
+    name: &'a str,
+}
+
+/// Body of `POST`/`PUT .../drawings`.
+#[derive(Serialize)]
+struct DrawingRequest<'a> {
+    svg: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    x: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    y: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    z: Option<i64>,
 }
 
 /// One row of [`Project::nodes_summary`].
@@ -130,13 +215,15 @@ impl Project {
         self
     }
 
-    fn apply(&mut self, data: &Value) -> Result<()> {
-        let mut new: Project = merge_update(&*self, data)?;
-        new.nodes = std::mem::take(&mut self.nodes);
-        new.links = std::mem::take(&mut self.links);
-        new.connector = self.connector.take();
-        *self = new;
-        Ok(())
+    /// Overlay the fields present in a server answer on this object.
+    fn apply(&mut self, new: Project) {
+        merge_some!(
+            self, new;
+            name, project_id, status, path, filename, auto_start, auto_close, auto_open,
+            drawing_grid_size, grid_size, scene_height, scene_width, show_grid,
+            show_interface_labels, show_layers, snap_to_grid, supplier, variables, zoom,
+            stats, snapshots, drawings
+        );
     }
 
     fn require(&self) -> Result<(Arc<Gns3Connector>, String)> {
@@ -165,8 +252,8 @@ impl Project {
                 .clone()
                 .ok_or_else(|| Error::invalid("Need to submit either project_id or name"))?;
             for p in conn.get_projects()? {
-                if str_field(&p, "name") == Some(name.as_str()) {
-                    self.project_id = str_field(&p, "project_id").map(String::from);
+                if p.name.as_deref() == Some(name.as_str()) {
+                    self.project_id = p.project_id;
                 }
             }
             if self.project_id.is_none() {
@@ -174,8 +261,8 @@ impl Project {
             }
         }
         let (conn, pid) = self.require()?;
-        let data = conn.call_json(Method::GET, &format!("/projects/{pid}"), Body::Empty)?;
-        self.apply(&data)?;
+        let data: Project = conn.call_json(Method::GET, &format!("/projects/{pid}"), Body::Empty)?;
+        self.apply(data);
         if get_stats {
             self.get_stats()?;
             let stats = self.stats.clone().unwrap_or_default();
@@ -201,16 +288,23 @@ impl Project {
             return Err(Error::invalid("Need to submit project name"));
         }
         let conn = self.connector.clone().ok_or(Error::MissingConnector)?;
-        let body = payload(&*self, &["stats", "nodes", "links", "connector"])?;
-        let data = conn.call_json(Method::POST, "/projects", Body::Json(body))?;
-        self.apply(&data)
+        // `stats` is read-only; nodes, links and the connector are never serialized
+        let request = Project {
+            stats: None,
+            ..self.clone()
+        };
+        let data: Project = conn.call_json(Method::POST, "/projects", Body::json(&request)?)?;
+        self.apply(data);
+        Ok(())
     }
 
-    /// Updates the project on the server with the given JSON fields.
-    pub fn update(&mut self, fields: Value) -> Result<()> {
+    /// Updates the project on the server with the `Some` fields of `patch`.
+    pub fn update(&mut self, patch: &ProjectUpdate) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let data = conn.call_json(Method::PUT, &format!("/projects/{pid}"), Body::Json(fields))?;
-        self.apply(&data)
+        let data: Project =
+            conn.call_json(Method::PUT, &format!("/projects/{pid}"), Body::json(patch)?)?;
+        self.apply(data);
+        Ok(())
     }
 
     /// Deletes the project and clears `project_id` / `name`.
@@ -235,15 +329,20 @@ impl Project {
     /// Opens the project.
     pub fn open(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let data = conn.call_json(Method::POST, &format!("/projects/{pid}/open"), Body::Empty)?;
-        self.apply(&data)
+        let data: Project =
+            conn.call_json(Method::POST, &format!("/projects/{pid}/open"), Body::Empty)?;
+        self.apply(data);
+        Ok(())
     }
 
     /// Refreshes `stats`.
     pub fn get_stats(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let data = conn.call_json(Method::GET, &format!("/projects/{pid}/stats"), Body::Empty)?;
-        self.stats = Some(serde_json::from_value(data)?);
+        self.stats = Some(conn.call_json(
+            Method::GET,
+            &format!("/projects/{pid}/stats"),
+            Body::Empty,
+        )?);
         Ok(())
     }
 
@@ -271,17 +370,14 @@ impl Project {
     /// Refreshes `nodes` from the server.
     pub fn get_nodes(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let raw: Vec<Value> = serde_json::from_value(conn.call_json(
+        let mut nodes: Vec<Node> = conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/nodes"),
             Body::Empty,
-        )?)?;
-        let mut nodes = Vec::with_capacity(raw.len());
-        for v in raw {
-            let mut node: Node = serde_json::from_value(v)?;
+        )?;
+        for node in &mut nodes {
             node.connector = Some(conn.clone());
             node.project_id = Some(pid.clone());
-            nodes.push(node);
         }
         self.nodes = nodes;
         Ok(())
@@ -290,17 +386,14 @@ impl Project {
     /// Refreshes `links` from the server.
     pub fn get_links(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let raw: Vec<Value> = serde_json::from_value(conn.call_json(
+        let mut links: Vec<Link> = conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/links"),
             Body::Empty,
-        )?)?;
-        let mut links = Vec::with_capacity(raw.len());
-        for v in raw {
-            let mut link: Link = serde_json::from_value(v)?;
+        )?;
+        for link in &mut links {
             link.connector = Some(conn.clone());
             link.project_id = Some(pid.clone());
-            links.push(link);
         }
         self.links = links;
         Ok(())
@@ -555,8 +648,11 @@ impl Project {
     /// Refreshes `snapshots` from the server.
     pub fn get_snapshots(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let data = conn.call_json(Method::GET, &format!("/projects/{pid}/snapshots"), Body::Empty)?;
-        self.snapshots = Some(serde_json::from_value(data)?);
+        self.snapshots = Some(conn.call_json(
+            Method::GET,
+            &format!("/projects/{pid}/snapshots"),
+            Body::Empty,
+        )?);
         Ok(())
     }
 
@@ -578,12 +674,11 @@ impl Project {
         if self.get_snapshot(Lookup::Name(name))?.is_some() {
             return Err(Error::invalid("Snapshot already created"));
         }
-        let data = conn.call_json(
+        let snapshot: Snapshot = conn.call_json(
             Method::POST,
             &format!("/projects/{pid}/snapshots"),
-            Body::Json(json!({ "name": name })),
+            Body::json(&SnapshotRequest { name })?,
         )?;
-        let snapshot: Snapshot = serde_json::from_value(data)?;
         self.snapshots.get_or_insert_with(Vec::new).push(snapshot.clone());
         Ok(snapshot)
     }
@@ -634,7 +729,11 @@ impl Project {
         for (index, node) in self.nodes.iter_mut().enumerate() {
             let x = (radius * (angle * index as f64).sin()) as i64;
             let y = (radius * -(angle * index as f64).cos()) as i64;
-            node.update(json!({ "x": x, "y": y }))?;
+            node.update(&NodeUpdate {
+                x: Some(x),
+                y: Some(y),
+                ..Default::default()
+            })?;
         }
         Ok(())
     }
@@ -642,8 +741,11 @@ impl Project {
     /// Refreshes `drawings` from the server.
     pub fn get_drawings(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let data = conn.call_json(Method::GET, &format!("/projects/{pid}/drawings"), Body::Empty)?;
-        self.drawings = Some(serde_json::from_value(data)?);
+        self.drawings = Some(conn.call_json(
+            Method::GET,
+            &format!("/projects/{pid}/drawings"),
+            Body::Empty,
+        )?);
         Ok(())
     }
 
@@ -664,12 +766,17 @@ impl Project {
     /// Python library; pass them explicitly here.
     pub fn create_drawing(&mut self, svg: &str, locked: bool, x: i64, y: i64, z: i64) -> Result<Drawing> {
         let (conn, pid) = self.require()?;
-        let data = conn.call_json(
+        let drawing: Drawing = conn.call_json(
             Method::POST,
             &format!("/projects/{pid}/drawings"),
-            Body::Json(json!({ "svg": svg, "locked": locked, "x": x, "y": y, "z": z })),
+            Body::json(&DrawingRequest {
+                svg,
+                locked: Some(locked),
+                x: Some(x),
+                y: Some(y),
+                z: Some(z),
+            })?,
         )?;
-        let drawing: Drawing = serde_json::from_value(data)?;
         self.drawings.get_or_insert_with(Vec::new).push(drawing.clone());
         Ok(drawing)
     }
@@ -688,20 +795,20 @@ impl Project {
         let current = self
             .get_drawing(drawing_id)?
             .ok_or_else(|| Error::not_found("drawing not found"))?;
-        let body = json!({
-            "svg": svg.map(String::from).unwrap_or(current.svg),
-            "locked": locked.or(current.locked),
-            "x": x.or(current.x),
-            "y": y.or(current.y),
-            "z": z.or(current.z),
-        });
-        let data = conn.call_json(
+        let request = DrawingRequest {
+            svg: svg.unwrap_or(&current.svg),
+            locked: locked.or(current.locked),
+            x: x.or(current.x),
+            y: y.or(current.y),
+            z: z.or(current.z),
+        };
+        let updated: Drawing = conn.call_json(
             Method::PUT,
             &format!("/projects/{pid}/drawings/{drawing_id}"),
-            Body::Json(body),
+            Body::json(&request)?,
         )?;
         self.get_drawings()?;
-        Ok(serde_json::from_value(data)?)
+        Ok(updated)
     }
 
     /// Deletes a drawing by ID.
@@ -725,7 +832,6 @@ fn endpoint(node: &Node, port: &Port) -> LinkEndpoint {
         node_id: node.node_id.clone().unwrap_or_default(),
         adapter_number: port.adapter_number,
         port_number: port.port_number,
-        label: Some(json!({ "text": port.name })),
-        extra: Default::default(),
+        label: Some(Label::new(port.name.clone())),
     }
 }

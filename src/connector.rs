@@ -7,13 +7,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use reqwest::blocking::{Client, Response};
+use reqwest::header::CONTENT_TYPE;
 use reqwest::Method;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
+use crate::compute::{Compute, ComputeImage, ComputePorts};
 use crate::error::{Error, Result};
-use crate::types::Lookup;
-use crate::util::str_field;
+use crate::link::Link;
+use crate::node::Node;
+use crate::project::Project;
+use crate::template::Template;
+use crate::types::{Lookup, ProjectStats};
 
 /// Name of the default compute.
 pub const LOCAL_COMPUTE: &str = "local";
@@ -23,13 +28,28 @@ pub const LOCAL_COMPUTE: &str = "local";
 pub enum Body {
     #[default]
     Empty,
-    /// JSON object/array body.
-    Json(Value),
+    /// An already serialized JSON document; build it with [`Body::json`].
+    Json(String),
     /// Raw bytes (file contents...).
     Bytes(Vec<u8>),
     /// A file streamed as request body (image uploads).
     File(File),
 }
+
+impl Body {
+    /// Serializes `value` as a JSON request body.
+    pub fn json<T: Serialize + ?Sized>(value: &T) -> Result<Body> {
+        Ok(Body::Json(serde_json::to_string(value)?))
+    }
+}
+
+/// Error document returned by the GNS3 server.
+#[derive(Debug, Deserialize)]
+struct ApiErrorBody {
+    status: Option<u16>,
+    message: Option<String>,
+}
+
 
 /// Response of `GET /version`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,7 +193,6 @@ impl fmt::Debug for Gns3Connector {
             .finish()
     }
 }
-
 impl Gns3Connector {
     /// Connector with default options (API v2, no auth, no TLS verification).
     pub fn new(url: impl AsRef<str>) -> Result<Self> {
@@ -207,8 +226,8 @@ impl Gns3Connector {
 
     /// Performs an HTTP operation against an absolute `url`.
     ///
-    /// Non-2xx answers are turned into [`Error::Api`] using the `status`/`message` JSON
-    /// fields GNS3 returns.
+    /// Non-2xx answers are turned into [`Error::Api`] using the `status`/`message` fields
+    /// GNS3 returns.
     pub fn http_call(
         &self,
         method: Method,
@@ -225,7 +244,7 @@ impl Gns3Connector {
         }
         req = match body {
             Body::Empty => req,
-            Body::Json(v) => req.json(&v),
+            Body::Json(text) => req.header(CONTENT_TYPE, "application/json").body(text),
             Body::Bytes(b) => req.body(b),
             Body::File(f) => req.body(f),
         };
@@ -235,14 +254,13 @@ impl Gns3Connector {
         let status = response.status();
         if status.is_client_error() || status.is_server_error() {
             let text = response.text().unwrap_or_default();
-            return Err(match serde_json::from_str::<Value>(&text) {
-                Ok(v) if v.get("message").is_some() => Error::Api {
-                    status: v
-                        .get("status")
-                        .and_then(Value::as_u64)
-                        .map(|s| s as u16)
-                        .unwrap_or_else(|| status.as_u16()),
-                    message: str_field(&v, "message").unwrap_or_default().to_string(),
+            return Err(match serde_json::from_str::<ApiErrorBody>(&text) {
+                Ok(ApiErrorBody {
+                       status: body_status,
+                       message: Some(message),
+                   }) => Error::Api {
+                    status: body_status.unwrap_or_else(|| status.as_u16()),
+                    message,
                 },
                 _ => Error::Api {
                     status: status.as_u16(),
@@ -259,161 +277,68 @@ impl Gns3Connector {
         self.http_call(method, &url, body, &[])
     }
 
-    pub(crate) fn call_json(&self, method: Method, path: &str, body: Body) -> Result<Value> {
-        Ok(self.call(method, path, body)?.json()?)
+    /// Like [`call`](Self::call), decoding the JSON answer into `T`.
+    pub(crate) fn call_json<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Body,
+    ) -> Result<T> {
+        let text = self.call(method, path, body)?.text()?;
+        Ok(serde_json::from_str(&text)?)
     }
 
-    fn get_json(&self, path: &str) -> Result<Value> {
+    fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.call_json(Method::GET, path, Body::Empty)
-    }
-
-    fn get_list(&self, path: &str) -> Result<Vec<Value>> {
-        Ok(serde_json::from_value(self.get_json(path)?)?)
     }
 
     /// Version information of the GNS3 server.
     pub fn get_version(&self) -> Result<Version> {
-        Ok(serde_json::from_value(self.get_json("/version")?)?)
+        self.get_json("/version")
     }
+
+    // ---- projects ----------------------------------------------------------------------
 
     /// Summary of the projects in the server (with node/link counts from the stats API).
     pub fn projects_summary(&self) -> Result<Vec<ProjectSummary>> {
         let mut out = Vec::new();
         for p in self.get_projects()? {
-            let project_id = str_field(&p, "project_id").unwrap_or_default().to_string();
-            let stats = self.get_json(&format!("/projects/{project_id}/stats"))?;
+            let project_id = p.project_id.unwrap_or_default();
+            let stats: ProjectStats = self.get_json(&format!("/projects/{project_id}/stats"))?;
             out.push(ProjectSummary {
-                name: str_field(&p, "name").unwrap_or_default().to_string(),
-                total_nodes: stats["nodes"].as_u64().unwrap_or(0),
-                total_links: stats["links"].as_u64().unwrap_or(0),
-                status: str_field(&p, "status").unwrap_or_default().to_string(),
+                name: p.name.unwrap_or_default(),
+                total_nodes: stats.nodes,
+                total_links: stats.links,
+                status: p.status.map(|s| s.to_string()).unwrap_or_default(),
                 project_id,
             });
         }
         Ok(out)
     }
 
-    /// List of the projects on the server (raw JSON objects).
-    pub fn get_projects(&self) -> Result<Vec<Value>> {
-        self.get_list("/projects")
+    /// The projects on the server. The returned objects have no connector assigned; use
+    /// [`Project::with_connector`] to work on one.
+    pub fn get_projects(&self) -> Result<Vec<Project>> {
+        self.get_json("/projects")
     }
 
     /// Retrieves a project by ID (404 is an error) or by name (`None` when not found).
-    pub fn get_project(&self, lookup: Lookup<'_>) -> Result<Option<Value>> {
+    pub fn get_project(&self, lookup: Lookup<'_>) -> Result<Option<Project>> {
         match lookup {
             Lookup::Id(id) => Ok(Some(self.get_json(&format!("/projects/{id}"))?)),
             Lookup::Name(name) => Ok(self
                 .get_projects()?
                 .into_iter()
-                .find(|p| str_field(p, "name") == Some(name))),
+                .find(|p| p.name.as_deref() == Some(name))),
         }
     }
 
-    /// Summary of the templates in the server.
-    pub fn templates_summary(&self) -> Result<Vec<TemplateSummary>> {
-        Ok(self
-            .get_templates()?
-            .iter()
-            .map(|t| {
-                let s = |k: &str| str_field(t, k).unwrap_or_default().to_string();
-                TemplateSummary {
-                    name: s("name"),
-                    template_id: s("template_id"),
-                    template_type: s("template_type"),
-                    builtin: t["builtin"].as_bool().unwrap_or(false),
-                    console_type: str_field(t, "console_type").unwrap_or("N/A").to_string(),
-                    category: s("category"),
-                }
-            })
-            .collect())
-    }
-
-    /// Templates defined on the server (raw JSON objects).
-    pub fn get_templates(&self) -> Result<Vec<Value>> {
-        self.get_list("/templates")
-    }
-
-    /// Retrieves a template by ID (404 is an error) or by name (`None` when not found).
-    pub fn get_template(&self, lookup: Lookup<'_>) -> Result<Option<Value>> {
-        match lookup {
-            Lookup::Id(id) => Ok(Some(self.get_json(&format!("/templates/{id}"))?)),
-            Lookup::Name(name) => Ok(self
-                .get_templates()?
-                .into_iter()
-                .find(|t| str_field(t, "name") == Some(name))),
-        }
-    }
-
-    fn template_id_of(&self, lookup: Lookup<'_>) -> Result<String> {
-        let template = self
-            .get_template(lookup)?
-            .ok_or_else(|| Error::not_found(format!("Template not found: {lookup:?}")))?;
-        Ok(str_field(&template, "template_id").unwrap_or_default().to_string())
-    }
-
-    /// Updates a template with the given JSON object fields.
-    pub fn update_template(&self, lookup: Lookup<'_>, fields: Value) -> Result<Value> {
-        let mut template = self
-            .get_template(lookup)?
-            .ok_or_else(|| Error::not_found(format!("Template not found: {lookup:?}")))?;
-        if let (Some(t), Some(f)) = (template.as_object_mut(), fields.as_object()) {
-            for (k, v) in f {
-                t.insert(k.clone(), v.clone());
-            }
-        }
-        let id = str_field(&template, "template_id").unwrap_or_default().to_string();
-        self.call_json(Method::PUT, &format!("/templates/{id}"), Body::Json(template))
-    }
-
-    /// Creates a template. `name` and `template_type` are required; `compute_id` defaults
-    /// to `"local"`. Fails if a template with the same name already exists.
-    pub fn create_template(&self, mut template: Value) -> Result<Value> {
-        let name = str_field(&template, "name")
-            .ok_or_else(|| Error::invalid("Parameter 'name' is mandatory"))?
-            .to_string();
-        if self.get_template(Lookup::Name(&name))?.is_some() {
-            return Err(Error::invalid(format!("Template already used: {name}")));
-        }
-        if let Some(obj) = template.as_object_mut() {
-            obj.entry("compute_id").or_insert_with(|| Value::from(LOCAL_COMPUTE));
-        }
-        self.call_json(Method::POST, "/templates", Body::Json(template))
-    }
-
-    /// Deletes a template by ID or name.
-    pub fn delete_template(&self, lookup: Lookup<'_>) -> Result<()> {
-        let id = match lookup {
-            Lookup::Id(id) => id.to_string(),
-            Lookup::Name(_) => self.template_id_of(lookup)?,
-        };
-        self.call(Method::DELETE, &format!("/templates/{id}"), Body::Empty)?;
-        Ok(())
-    }
-
-    /// Nodes defined on a project (raw JSON).
-    pub fn get_nodes(&self, project_id: &str) -> Result<Vec<Value>> {
-        self.get_list(&format!("/projects/{project_id}/nodes"))
-    }
-
-    pub fn get_node(&self, project_id: &str, node_id: &str) -> Result<Value> {
-        self.get_json(&format!("/projects/{project_id}/nodes/{node_id}"))
-    }
-
-    /// Links defined on a project (raw JSON).
-    pub fn get_links(&self, project_id: &str) -> Result<Vec<Value>> {
-        self.get_list(&format!("/projects/{project_id}/links"))
-    }
-
-    pub fn get_link(&self, project_id: &str, link_id: &str) -> Result<Value> {
-        self.get_json(&format!("/projects/{project_id}/links/{link_id}"))
-    }
-
-    /// Creates a project from a JSON object (`name` is required).
-    pub fn create_project(&self, project: Value) -> Result<Value> {
-        if str_field(&project, "name").is_none() {
+    /// Creates a project (`name` is required) and returns it as the server stored it.
+    pub fn create_project(&self, project: &Project) -> Result<Project> {
+        if project.name.is_none() {
             return Err(Error::invalid("Parameter 'name' is mandatory"));
         }
-        self.call_json(Method::POST, "/projects", Body::Json(project))
+        self.call_json(Method::POST, "/projects", Body::json(project)?)
     }
 
     pub fn delete_project(&self, project_id: &str) -> Result<()> {
@@ -421,19 +346,116 @@ impl Gns3Connector {
         Ok(())
     }
 
+    // ---- templates ---------------------------------------------------------------------
+
+    /// Summary of the templates in the server.
+    pub fn templates_summary(&self) -> Result<Vec<TemplateSummary>> {
+        Ok(self
+            .get_templates()?
+            .into_iter()
+            .map(|t| TemplateSummary {
+                template_type: t.template_type().to_string(),
+                builtin: t.is_builtin(),
+                console_type: t.console_type.map_or("N/A".to_string(), |c| c.to_string()),
+                category: t.category.unwrap_or_default(),
+                template_id: t.template_id.unwrap_or_default(),
+                name: t.name,
+            })
+            .collect())
+    }
+
+    /// The templates defined on the server. The returned objects have no connector
+    /// assigned; [`Template::list`] returns them bound to one.
+    pub fn get_templates(&self) -> Result<Vec<Template>> {
+        self.get_json("/templates")
+    }
+
+    /// Retrieves a template by ID (404 is an error) or by name (`None` when not found).
+    pub fn get_template(&self, lookup: Lookup<'_>) -> Result<Option<Template>> {
+        match lookup {
+            Lookup::Id(id) => Ok(Some(self.get_json(&format!("/templates/{id}"))?)),
+            Lookup::Name(name) => Ok(self.get_templates()?.into_iter().find(|t| t.name == name)),
+        }
+    }
+
+    /// Creates a template. `compute_id` defaults to `"local"`; fails if a template with the
+    /// same name already exists. Returns the template as the server stored it.
+    pub fn create_template(&self, template: &Template) -> Result<Template> {
+        if template.name.is_empty() {
+            return Err(Error::invalid("Parameter 'name' is mandatory"));
+        }
+        if self.get_template(Lookup::Name(&template.name))?.is_some() {
+            return Err(Error::invalid(format!(
+                "Template already used: {}",
+                template.name
+            )));
+        }
+        let mut body = template.clone();
+        body.connector = None;
+        if body.compute_id.is_none() {
+            body.compute_id = Some(LOCAL_COMPUTE.to_string());
+        }
+        self.call_json(Method::POST, "/templates", Body::json(&body)?)
+    }
+
+    /// Sends `template` (which needs a `template_id`) to the server and returns the stored
+    /// template.
+    pub fn update_template(&self, template: &Template) -> Result<Template> {
+        let id = template
+            .template_id
+            .as_deref()
+            .ok_or_else(|| Error::invalid("Need to submit template_id"))?;
+        self.call_json(Method::PUT, &format!("/templates/{id}"), Body::json(template)?)
+    }
+
+    /// Deletes a template by ID or name.
+    pub fn delete_template(&self, lookup: Lookup<'_>) -> Result<()> {
+        let id = match lookup {
+            Lookup::Id(id) => id.to_string(),
+            Lookup::Name(name) => self
+                .get_template(lookup)?
+                .and_then(|t| t.template_id)
+                .ok_or_else(|| Error::not_found(format!("Template not found: {name}")))?,
+        };
+        self.call(Method::DELETE, &format!("/templates/{id}"), Body::Empty)?;
+        Ok(())
+    }
+
+    // ---- nodes and links of a project ----------------------------------------------------
+
+    /// Nodes defined on a project (without connector; see [`Project::get_nodes`]).
+    pub fn get_nodes(&self, project_id: &str) -> Result<Vec<Node>> {
+        self.get_json(&format!("/projects/{project_id}/nodes"))
+    }
+
+    pub fn get_node(&self, project_id: &str, node_id: &str) -> Result<Node> {
+        self.get_json(&format!("/projects/{project_id}/nodes/{node_id}"))
+    }
+
+    /// Links defined on a project (without connector; see [`Project::get_links`]).
+    pub fn get_links(&self, project_id: &str) -> Result<Vec<Link>> {
+        self.get_json(&format!("/projects/{project_id}/links"))
+    }
+
+    pub fn get_link(&self, project_id: &str, link_id: &str) -> Result<Link> {
+        self.get_json(&format!("/projects/{project_id}/links/{link_id}"))
+    }
+
+    // ---- computes ------------------------------------------------------------------------
+
     /// List of computes, with attributes such as cpu/memory usage.
-    pub fn get_computes(&self) -> Result<Vec<Value>> {
-        self.get_list("/computes")
+    pub fn get_computes(&self) -> Result<Vec<Compute>> {
+        self.get_json("/computes")
     }
 
     /// A compute (use [`LOCAL_COMPUTE`] for the default one).
-    pub fn get_compute(&self, compute_id: &str) -> Result<Value> {
+    pub fn get_compute(&self, compute_id: &str) -> Result<Compute> {
         self.get_json(&format!("/computes/{compute_id}"))
     }
 
     /// Images available on a compute for an emulator (`qemu`, `iou`, `docker`...).
-    pub fn get_compute_images(&self, emulator: &str, compute_id: &str) -> Result<Vec<Value>> {
-        self.get_list(&format!("/computes/{compute_id}/{emulator}/images"))
+    pub fn get_compute_images(&self, emulator: &str, compute_id: &str) -> Result<Vec<ComputeImage>> {
+        self.get_json(&format!("/computes/{compute_id}/{emulator}/images"))
     }
 
     /// Uploads an image file to a compute.
@@ -463,8 +485,8 @@ impl Gns3Connector {
         Ok(())
     }
 
-    /// Ports used and configured by a compute (`console_ports`, `udp_ports`).
-    pub fn get_compute_ports(&self, compute_id: &str) -> Result<Value> {
+    /// Ports used and configured by a compute.
+    pub fn get_compute_ports(&self, compute_id: &str) -> Result<ComputePorts> {
         self.get_json(&format!("/computes/{compute_id}/ports"))
     }
 }

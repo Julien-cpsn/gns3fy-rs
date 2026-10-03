@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 use crate::connector::{Body, Gns3Connector};
 use crate::error::{Error, Result};
-use crate::types::{LinkEndpoint, LinkType};
-use crate::util::{merge_update, payload};
+use crate::types::{LinkEndpoint, LinkFilters, LinkStyle, LinkType};
+use crate::util::merge_some;
 
 /// A link between two node ports of a project.
 ///
@@ -18,19 +17,45 @@ use crate::util::{merge_update, payload};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Link {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_type: Option<LinkType>,
-    pub link_style: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_style: Option<LinkStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub suspend: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nodes: Option<Vec<LinkEndpoint>>,
-    pub filters: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<LinkFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capturing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_file_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_compute_id: Option<String>,
     #[serde(skip)]
     pub connector: Option<Arc<Gns3Connector>>,
+}
+
+/// The attributes of a link that can be changed on the server; `None` fields are left as
+/// they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<LinkFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_style: Option<LinkStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<Vec<LinkEndpoint>>,
+    /// `true` pauses the link (packets are dropped).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspend: Option<bool>,
 }
 
 impl Link {
@@ -51,12 +76,13 @@ impl Link {
         self
     }
 
-    /// Overlay the fields present in `data` (a server answer) on this object.
-    fn apply(&mut self, data: &Value) -> Result<()> {
-        let mut new: Link = merge_update(&*self, data)?;
-        new.connector = self.connector.take();
-        *self = new;
-        Ok(())
+    /// Overlay the fields present in a server answer on this object.
+    fn apply(&mut self, new: Link) {
+        merge_some!(
+            self, new;
+            link_id, link_type, link_style, project_id, suspend, nodes, filters, capturing,
+            capture_file_path, capture_file_name, capture_compute_id
+        );
     }
 
     fn connector_and_project(&self) -> Result<(Arc<Gns3Connector>, String)> {
@@ -80,8 +106,9 @@ impl Link {
     /// Retrieves the link from the server and updates this object.
     pub fn get(&mut self) -> Result<()> {
         let (conn, pid, lid) = self.require()?;
-        let data = conn.call_json(Method::GET, &format!("/projects/{pid}/links/{lid}"), Body::Empty)?;
-        self.apply(&data)
+        let data: Link = conn.call_json(Method::GET, &format!("/projects/{pid}/links/{lid}"), Body::Empty)?;
+        self.apply(data);
+        Ok(())
     }
 
     /// Deletes the link on the server and clears `project_id` / `link_id`.
@@ -96,20 +123,24 @@ impl Link {
     /// Creates the link on the server (needs `project_id` and `nodes`).
     pub fn create(&mut self) -> Result<()> {
         let (conn, pid) = self.connector_and_project()?;
-        let body = payload(&*self, &["connector"])?;
-        let data = conn.call_json(Method::POST, &format!("/projects/{pid}/links"), Body::Json(body))?;
-        self.apply(&data)
+        let data: Link = conn.call_json(
+            Method::POST,
+            &format!("/projects/{pid}/links"),
+            Body::json(&*self)?,
+        )?;
+        self.apply(data);
+        Ok(())
     }
 
-    /// Updates the link on the server with the given JSON fields
-    /// (`filters`, `suspend`, `nodes`, `link_style`...).
-    pub fn update(&mut self, fields: Value) -> Result<()> {
+    /// Updates the link on the server with the `Some` fields of `patch`.
+    pub fn update(&mut self, patch: &LinkUpdate) -> Result<()> {
         let (conn, pid, lid) = self.require()?;
-        let data = conn.call_json(
+        let data: Link = conn.call_json(
             Method::PUT,
             &format!("/projects/{pid}/links/{lid}"),
-            Body::Json(fields),
+            Body::json(patch)?,
         )?;
-        self.apply(&data)
+        self.apply(data);
+        Ok(())
     }
 }

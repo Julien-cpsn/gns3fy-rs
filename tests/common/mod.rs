@@ -15,6 +15,7 @@ pub struct Recorded {
     pub path: String,
     pub body: String,
     pub authorization: Option<String>,
+    pub content_type: Option<String>,
 }
 
 struct Route {
@@ -140,6 +141,7 @@ fn handle(mut stream: TcpStream, routes: &Arc<Mutex<Vec<Route>>>, recorded: &Arc
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
     let authorization = header("authorization");
+    let content_type = header("content-type");
     while buf.len() < header_end + content_length {
         let n = stream.read(&mut chunk).unwrap_or(0);
         if n == 0 {
@@ -153,6 +155,7 @@ fn handle(mut stream: TcpStream, routes: &Arc<Mutex<Vec<Route>>>, recorded: &Arc
         path: path.clone(),
         body,
         authorization,
+        content_type,
     });
 
     let (status, payload) = {
@@ -187,9 +190,20 @@ pub fn data(name: &str) -> String {
     std::fs::read_to_string(data_path(name)).unwrap()
 }
 
-/// Parsed fixture.
+/// Parsed fixture, as raw JSON. Only meant to describe the *wire format* (mock answers,
+/// expected request bodies); use [`load`] to get typed fixtures.
 pub fn json(name: &str) -> Value {
     serde_json::from_str(&data(name)).unwrap()
+}
+
+/// Typed fixture.
+pub fn load<T: serde::de::DeserializeOwned>(name: &str) -> T {
+    serde_json::from_str(&data(name)).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
+}
+
+/// A typed value as the JSON text a mock server answers with.
+pub fn body<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap()
 }
 
 pub const PROJECT_ID: &str = "4b21dfb3-675a-4efa-8613-2f7fb32e76fe";

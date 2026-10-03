@@ -28,25 +28,39 @@
 
 mod util;
 
+pub mod compute;
 pub mod connector;
 pub mod drawing_utils;
 pub mod error;
 pub mod link;
 pub mod node;
 pub mod project;
+pub mod properties;
 pub mod template;
+pub mod template_kinds;
 pub mod types;
 
+pub use compute::{Compute, ComputeCapabilities, ComputeImage, ComputePorts};
 pub use connector::{
     Body, Gns3Connector, Gns3ConnectorBuilder, ProjectSummary, TemplateSummary, Version,
     LOCAL_COMPUTE,
 };
 pub use error::{Error, Result};
-pub use link::Link;
-pub use node::Node;
-pub use project::{LinkSummary, NodeInventory, NodeSummary, Project, DEFAULT_POLL_WAIT};
+pub use link::{Link, LinkUpdate};
+pub use node::{Node, NodeUpdate};
+pub use project::{
+    LinkSummary, NodeInventory, NodeSummary, Project, ProjectUpdate, DEFAULT_POLL_WAIT,
+};
+pub use properties::NodeProperties;
 pub use template::Template;
+pub use template_kinds::{
+    AtmSwitchTemplate, CloudTemplate, DockerTemplate, DynamipsTemplate, EthernetHubTemplate,
+    EthernetSwitchTemplate, FrameRelaySwitchTemplate, IouTemplate, NatTemplate, QemuTemplate,
+    TemplateKind, TracengTemplate, VirtualboxTemplate, VmwareTemplate, VpcsTemplate,
+    VpcsTemplateProperties,
+};
 pub use types::{
-    ConsoleType, Drawing, LinkEndpoint, LinkType, Lookup, NodeStatus, NodeType, Port,
-    ProjectStats, ProjectStatus, Snapshot, TemplateType,
+    CloudInterface, ConsoleType, CustomAdapter, Drawing, Label, LinkEndpoint, LinkFilters,
+    LinkStyle, LinkType, Lookup, NodeStatus, NodeType, Port, PortMapping, ProjectStats,
+    ProjectStatus, Snapshot, Supplier, TemplateType, Variable,
 };

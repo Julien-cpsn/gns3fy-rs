@@ -104,42 +104,42 @@ impl Link {
     }
 
     /// Retrieves the link from the server and updates this object.
-    pub fn get(&mut self) -> Result<()> {
+    pub async fn get(&mut self) -> Result<()> {
         let (conn, pid, lid) = self.require()?;
-        let data: Link = conn.call_json(Method::GET, &format!("/projects/{pid}/links/{lid}"), Body::Empty)?;
+        let data: Link = conn.call_json(Method::GET, &format!("/projects/{pid}/links/{lid}"), Body::Empty).await?;
         self.apply(data);
         Ok(())
     }
 
     /// Deletes the link on the server and clears `project_id` / `link_id`.
-    pub fn delete(&mut self) -> Result<()> {
+    pub async fn delete(&mut self) -> Result<()> {
         let (conn, pid, lid) = self.require()?;
-        conn.call(Method::DELETE, &format!("/projects/{pid}/links/{lid}"), Body::Empty)?;
+        conn.call(Method::DELETE, &format!("/projects/{pid}/links/{lid}"), Body::Empty).await?;
         self.project_id = None;
         self.link_id = None;
         Ok(())
     }
 
     /// Creates the link on the server (needs `project_id` and `nodes`).
-    pub fn create(&mut self) -> Result<()> {
+    pub async fn create(&mut self) -> Result<()> {
         let (conn, pid) = self.connector_and_project()?;
         let data: Link = conn.call_json(
             Method::POST,
             &format!("/projects/{pid}/links"),
             Body::json(&*self)?,
-        )?;
+        ).await?;
         self.apply(data);
         Ok(())
     }
 
     /// Updates the link on the server with the `Some` fields of `patch`.
-    pub fn update(&mut self, patch: &LinkUpdate) -> Result<()> {
+    pub async fn update(&mut self, patch: &LinkUpdate) -> Result<()> {
         let (conn, pid, lid) = self.require()?;
         let data: Link = conn.call_json(
             Method::PUT,
             &format!("/projects/{pid}/links/{lid}"),
             Body::json(patch)?,
-        )?;
+        ).await?;
         self.apply(data);
         Ok(())
     }

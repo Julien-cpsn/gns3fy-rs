@@ -2,17 +2,16 @@
 
 use std::fmt;
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use reqwest::blocking::{Client, Response};
 use reqwest::header::CONTENT_TYPE;
-use reqwest::Method;
+use reqwest::{Client, Method, Response};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-
 use crate::compute::{Compute, ComputeImage, ComputePorts};
 use crate::error::{Error, Result};
 use crate::link::Link;
@@ -164,10 +163,14 @@ impl Gns3ConnectorBuilder {
         self
     }
     pub fn build(self) -> Result<Gns3Connector> {
-        let client = Client::builder()
-            .danger_accept_invalid_certs(!self.verify)
-            .timeout(self.timeout)
-            .build()?;
+        let mut client_builder = Client::builder().danger_accept_invalid_certs(!self.verify);
+
+        if let Some(timeout) = self.timeout {
+            client_builder = client_builder.timeout(timeout);
+        }
+
+        let client = client_builder.build()?;
+
         Ok(Gns3Connector {
             base_url: format!("{}/v{}", self.url.trim_matches('/'), self.api_version),
             user: self.user,
@@ -189,9 +192,10 @@ impl Gns3ConnectorBuilder {
 /// use std::sync::Arc;
 /// use gns3fy_rs::Gns3Connector;
 ///
-/// # fn main() -> gns3fy_rs::Result<()> {
+/// #[tokio::main]
+/// # async fn main() -> gns3fy_rs::Result<()> {
 /// let server = Arc::new(Gns3Connector::new("http://localhost:3080")?);
-/// println!("{:?}", server.get_version()?);
+/// println!("{:?}", server.get_version().await?);
 /// # Ok(()) }
 /// ```
 pub struct Gns3Connector {
@@ -249,7 +253,7 @@ impl Gns3Connector {
     ///
     /// Non-2xx answers are turned into [`Error::Api`] using the `status`/`message` fields
     /// GNS3 returns.
-    pub fn http_call(
+    pub async fn http_call(
         &self,
         method: Method,
         url: &str,
@@ -267,14 +271,18 @@ impl Gns3Connector {
             Body::Empty => req,
             Body::Json(text) => req.header(CONTENT_TYPE, "application/json").body(text),
             Body::Bytes(b) => req.body(b),
-            Body::File(f) => req.body(f),
+            Body::File(mut f) => {
+                let mut content = String::new();
+                f.read_to_string(&mut content)?;
+                req.body(content)
+            },
         };
-        let response = req.send()?;
+        let response = req.send().await?;
         self.api_calls.fetch_add(1, Ordering::Relaxed);
 
         let status = response.status();
         if status.is_client_error() || status.is_server_error() {
-            let text = response.text().unwrap_or_default();
+            let text = response.text().await.unwrap_or_default();
             return Err(match serde_json::from_str::<ApiErrorBody>(&text) {
                 Ok(ApiErrorBody {
                        status: body_status,
@@ -293,24 +301,24 @@ impl Gns3Connector {
     }
 
     /// Call a path relative to [`base_url`](Self::base_url) (must start with `/`).
-    pub(crate) fn call(&self, method: Method, path: &str, body: Body) -> Result<Response> {
+    pub(crate) async fn call(&self, method: Method, path: &str, body: Body) -> Result<Response> {
         let url = format!("{}{}", self.base_url, path);
-        self.http_call(method, &url, body, &[])
+        self.http_call(method, &url, body, &[]).await
     }
 
     /// Like [`call`](Self::call), decoding the JSON answer into `T`.
-    pub(crate) fn call_json<T: DeserializeOwned>(
+    pub(crate) async fn call_json<T: DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
         body: Body,
     ) -> Result<T> {
-        let text = self.call(method, path, body)?.text()?;
+        let text = self.call(method, path, body).await?.text().await?;
         Ok(serde_json::from_str(&text)?)
     }
 
-    fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        self.call_json(Method::GET, path, Body::Empty)
+    async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.call_json(Method::GET, path, Body::Empty).await
     }
 
     /// Attaches this connector to an object received from the server.
@@ -325,19 +333,19 @@ impl Gns3Connector {
     }
 
     /// Version information of the GNS3 server.
-    pub fn get_version(&self) -> Result<Version> {
-        self.get_json("/version")
+    pub async fn get_version(&self) -> Result<Version> {
+        self.get_json("/version").await
     }
 
     // ---- projects ----------------------------------------------------------------------
 
     /// Summary of the projects in the server (with node/link counts from the stats API).
-    pub fn projects_summary(&self) -> Result<Vec<ProjectSummary>> {
+    pub async fn projects_summary(&self) -> Result<Vec<ProjectSummary>> {
         let mut out = Vec::new();
-        let projects: Vec<Project> = self.get_json("/projects")?;
+        let projects: Vec<Project> = self.get_json("/projects").await?;
         for p in projects {
             let project_id = p.project_id.unwrap_or_default();
-            let stats: ProjectStats = self.get_json(&format!("/projects/{project_id}/stats"))?;
+            let stats: ProjectStats = self.get_json(&format!("/projects/{project_id}/stats")).await?;
             out.push(ProjectSummary {
                 name: p.name.unwrap_or_default(),
                 total_nodes: stats.nodes,
@@ -353,44 +361,45 @@ impl Gns3Connector {
     ///
     /// Only the project's own attributes are loaded; call [`Project::get`] to load its
     /// nodes, links, snapshots...
-    pub fn get_projects(self: &Arc<Self>) -> Result<Vec<Project>> {
-        let projects = self.get_json("/projects")?;
+    pub async fn get_projects(self: &Arc<Self>) -> Result<Vec<Project>> {
+        let projects = self.get_json("/projects").await?;
         Ok(self.bound_all(projects))
     }
 
     /// Retrieves a project by ID (404 is an error) or by name (`None` when not found).
-    pub fn get_project(self: &Arc<Self>, lookup: Lookup<'_>) -> Result<Option<Project>> {
+    pub async fn get_project(self: &Arc<Self>, lookup: Lookup<'_>) -> Result<Option<Project>> {
         match lookup {
             Lookup::Id(id) => {
-                let project = self.get_json(&format!("/projects/{id}"))?;
+                let project = self.get_json(&format!("/projects/{id}")).await?;
                 Ok(Some(self.bound(project)))
             }
             Lookup::Name(name) => Ok(self
-                .get_projects()?
+                .get_projects()
+                .await?
                 .into_iter()
                 .find(|p| p.name.as_deref() == Some(name))),
         }
     }
 
     /// Creates a project (`name` is required) and returns it as the server stored it.
-    pub fn create_project(self: &Arc<Self>, project: &Project) -> Result<Project> {
+    pub async fn create_project(self: &Arc<Self>, project: &Project) -> Result<Project> {
         if project.name.is_none() {
             return Err(Error::invalid("Parameter 'name' is mandatory"));
         }
-        let created = self.call_json(Method::POST, "/projects", Body::json(project)?)?;
+        let created = self.call_json(Method::POST, "/projects", Body::json(project)?).await?;
         Ok(self.bound(created))
     }
 
-    pub fn delete_project(&self, project_id: &str) -> Result<()> {
-        self.call(Method::DELETE, &format!("/projects/{project_id}"), Body::Empty)?;
+    pub async fn delete_project(&self, project_id: &str) -> Result<()> {
+        self.call(Method::DELETE, &format!("/projects/{project_id}"), Body::Empty).await?;
         Ok(())
     }
 
     // ---- templates ---------------------------------------------------------------------
 
     /// Summary of the templates in the server.
-    pub fn templates_summary(&self) -> Result<Vec<TemplateSummary>> {
-        let templates: Vec<Template> = self.get_json("/templates")?;
+    pub async fn templates_summary(&self) -> Result<Vec<TemplateSummary>> {
+        let templates: Vec<Template> = self.get_json("/templates").await?;
         Ok(templates
             .into_iter()
             .map(|t| TemplateSummary {
@@ -405,29 +414,29 @@ impl Gns3Connector {
     }
 
     /// The templates defined on the server, ready to use: each one carries this connector.
-    pub fn get_templates(self: &Arc<Self>) -> Result<Vec<Template>> {
-        let templates = self.get_json("/templates")?;
+    pub async fn get_templates(self: &Arc<Self>) -> Result<Vec<Template>> {
+        let templates = self.get_json("/templates").await?;
         Ok(self.bound_all(templates))
     }
 
     /// Retrieves a template by ID (404 is an error) or by name (`None` when not found).
-    pub fn get_template(self: &Arc<Self>, lookup: Lookup<'_>) -> Result<Option<Template>> {
+    pub async fn get_template(self: &Arc<Self>, lookup: Lookup<'_>) -> Result<Option<Template>> {
         match lookup {
             Lookup::Id(id) => {
-                let template = self.get_json(&format!("/templates/{id}"))?;
+                let template = self.get_json(&format!("/templates/{id}")).await?;
                 Ok(Some(self.bound(template)))
             }
-            Lookup::Name(name) => Ok(self.get_templates()?.into_iter().find(|t| t.name == name)),
+            Lookup::Name(name) => Ok(self.get_templates().await?.into_iter().find(|t| t.name == name)),
         }
     }
 
     /// Creates a template. `compute_id` defaults to `"local"`; fails if a template with the
     /// same name already exists. Returns the template as the server stored it.
-    pub fn create_template(self: &Arc<Self>, template: &Template) -> Result<Template> {
+    pub async fn create_template(self: &Arc<Self>, template: &Template) -> Result<Template> {
         if template.name.is_empty() {
             return Err(Error::invalid("Parameter 'name' is mandatory"));
         }
-        if self.get_template(Lookup::Name(&template.name))?.is_some() {
+        if self.get_template(Lookup::Name(&template.name)).await?.is_some() {
             return Err(Error::invalid(format!(
                 "Template already used: {}",
                 template.name
@@ -438,27 +447,27 @@ impl Gns3Connector {
         if body.compute_id.is_none() {
             body.compute_id = Some(LOCAL_COMPUTE.to_string());
         }
-        let created = self.call_json(Method::POST, "/templates", Body::json(&body)?)?;
+        let created = self.call_json(Method::POST, "/templates", Body::json(&body)?).await?;
         Ok(self.bound(created))
     }
 
     /// Sends `template` (which needs a `template_id`) to the server and returns the stored
     /// template.
-    pub fn update_template(self: &Arc<Self>, template: &Template) -> Result<Template> {
+    pub async fn update_template(self: &Arc<Self>, template: &Template) -> Result<Template> {
         let id = template
             .template_id
             .as_deref()
             .ok_or_else(|| Error::invalid("Need to submit template_id"))?;
-        let saved = self.call_json(Method::PUT, &format!("/templates/{id}"), Body::json(template)?)?;
+        let saved = self.call_json(Method::PUT, &format!("/templates/{id}"), Body::json(template)?).await?;
         Ok(self.bound(saved))
     }
 
     /// Deletes a template by ID or name.
-    pub fn delete_template(&self, lookup: Lookup<'_>) -> Result<()> {
+    pub async fn delete_template(&self, lookup: Lookup<'_>) -> Result<()> {
         let id = match lookup {
             Lookup::Id(id) => id.to_string(),
             Lookup::Name(name) => {
-                let templates: Vec<Template> = self.get_json("/templates")?;
+                let templates: Vec<Template> = self.get_json("/templates").await?;
                 templates
                     .into_iter()
                     .find(|t| t.name == name)
@@ -466,53 +475,53 @@ impl Gns3Connector {
                     .ok_or_else(|| Error::not_found(format!("Template not found: {name}")))?
             }
         };
-        self.call(Method::DELETE, &format!("/templates/{id}"), Body::Empty)?;
+        self.call(Method::DELETE, &format!("/templates/{id}"), Body::Empty).await?;
         Ok(())
     }
 
     // ---- nodes and links of a project ----------------------------------------------------
 
     /// Nodes defined on a project, ready to use: each one carries this connector.
-    pub fn get_nodes(self: &Arc<Self>, project_id: &str) -> Result<Vec<Node>> {
-        let nodes = self.get_json(&format!("/projects/{project_id}/nodes"))?;
+    pub async fn get_nodes(self: &Arc<Self>, project_id: &str) -> Result<Vec<Node>> {
+        let nodes = self.get_json(&format!("/projects/{project_id}/nodes")).await?;
         Ok(self.bound_all(nodes))
     }
 
-    pub fn get_node(self: &Arc<Self>, project_id: &str, node_id: &str) -> Result<Node> {
-        let node = self.get_json(&format!("/projects/{project_id}/nodes/{node_id}"))?;
+    pub async fn get_node(self: &Arc<Self>, project_id: &str, node_id: &str) -> Result<Node> {
+        let node = self.get_json(&format!("/projects/{project_id}/nodes/{node_id}")).await?;
         Ok(self.bound(node))
     }
 
     /// Links defined on a project, ready to use: each one carries this connector.
-    pub fn get_links(self: &Arc<Self>, project_id: &str) -> Result<Vec<Link>> {
-        let links = self.get_json(&format!("/projects/{project_id}/links"))?;
+    pub async fn get_links(self: &Arc<Self>, project_id: &str) -> Result<Vec<Link>> {
+        let links = self.get_json(&format!("/projects/{project_id}/links")).await?;
         Ok(self.bound_all(links))
     }
 
-    pub fn get_link(self: &Arc<Self>, project_id: &str, link_id: &str) -> Result<Link> {
-        let link = self.get_json(&format!("/projects/{project_id}/links/{link_id}"))?;
+    pub async fn get_link(self: &Arc<Self>, project_id: &str, link_id: &str) -> Result<Link> {
+        let link = self.get_json(&format!("/projects/{project_id}/links/{link_id}")).await?;
         Ok(self.bound(link))
     }
 
     // ---- computes ------------------------------------------------------------------------
 
     /// List of computes, with attributes such as cpu/memory usage.
-    pub fn get_computes(&self) -> Result<Vec<Compute>> {
-        self.get_json("/computes")
+    pub async fn get_computes(&self) -> Result<Vec<Compute>> {
+        self.get_json("/computes").await
     }
 
     /// A compute (use [`LOCAL_COMPUTE`] for the default one).
-    pub fn get_compute(&self, compute_id: &str) -> Result<Compute> {
-        self.get_json(&format!("/computes/{compute_id}"))
+    pub async fn get_compute(&self, compute_id: &str) -> Result<Compute> {
+        self.get_json(&format!("/computes/{compute_id}")).await
     }
 
     /// Images available on a compute for an emulator (`qemu`, `iou`, `docker`...).
-    pub fn get_compute_images(&self, emulator: &str, compute_id: &str) -> Result<Vec<ComputeImage>> {
-        self.get_json(&format!("/computes/{compute_id}/{emulator}/images"))
+    pub async fn get_compute_images(&self, emulator: &str, compute_id: &str) -> Result<Vec<ComputeImage>> {
+        self.get_json(&format!("/computes/{compute_id}/{emulator}/images")).await
     }
 
     /// Uploads an image file to a compute.
-    pub fn upload_compute_image(
+    pub async fn upload_compute_image(
         &self,
         emulator: &str,
         file_path: impl AsRef<Path>,
@@ -534,12 +543,12 @@ impl Gns3Connector {
             Method::POST,
             &format!("/computes/{compute_id}/{emulator}/images/{filename}"),
             Body::File(file),
-        )?;
+        ).await?;
         Ok(())
     }
 
     /// Ports used and configured by a compute.
-    pub fn get_compute_ports(&self, compute_id: &str) -> Result<ComputePorts> {
-        self.get_json(&format!("/computes/{compute_id}/ports"))
+    pub async fn get_compute_ports(&self, compute_id: &str) -> Result<ComputePorts> {
+        self.get_json(&format!("/computes/{compute_id}/ports")).await
     }
 }

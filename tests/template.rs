@@ -30,8 +30,8 @@ fn path(id: &str) -> String {
 
 // ---------------------------------------------------------------- parsing
 
-#[test]
-fn every_fixture_template_round_trips_without_losing_fields() {
+#[tokio::test]
+pub async fn every_fixture_template_round_trips_without_losing_fields() {
     let all = json("templates.json");
     assert_eq!(all.as_array().unwrap().len(), 11);
     for original in all.as_array().unwrap() {
@@ -47,8 +47,8 @@ fn every_fixture_template_round_trips_without_losing_fields() {
     }
 }
 
-#[test]
-fn typed_fields_and_type_specific_properties() {
+#[tokio::test]
+pub async fn typed_fields_and_type_specific_properties() {
     let alpine: Template = serde_json::from_value(by_name("alpine")).unwrap();
     assert_eq!(alpine.template_type(), TemplateType::Docker);
     assert_eq!(alpine.category.as_deref(), Some("guest"));
@@ -68,14 +68,14 @@ fn typed_fields_and_type_specific_properties() {
     assert!(cloud.is_builtin());
 }
 
-#[test]
-fn invalid_template_or_console_type_is_rejected() {
+#[tokio::test]
+pub async fn invalid_template_or_console_type_is_rejected() {
     assert!(serde_json::from_value::<Template>(json!({"template_type": "toaster"})).is_err());
     assert!(serde_json::from_value::<Template>(json!({"console_type": "smoke"})).is_err());
 }
 
-#[test]
-fn template_type_wire_names_and_node_type_conversion() {
+#[tokio::test]
+pub async fn template_type_wire_names_and_node_type_conversion() {
     for t in [
         "cloud", "nat", "ethernet_hub", "ethernet_switch", "frame_relay_switch", "atm_switch",
         "docker", "dynamips", "vpcs", "traceng", "virtualbox", "vmware", "iou", "qemu",
@@ -88,8 +88,8 @@ fn template_type_wire_names_and_node_type_conversion() {
     }
 }
 
-#[test]
-fn equality_ignores_the_connector() {
+#[tokio::test]
+pub async fn equality_ignores_the_connector() {
     let server = Routes::new().start();
     let a: Template = serde_json::from_value(by_name("alpine")).unwrap();
     let mut b = a.clone();
@@ -101,8 +101,8 @@ fn equality_ignores_the_connector() {
 
 // ---------------------------------------------------------------- list / find
 
-#[test]
-fn list_and_find() {
+#[tokio::test]
+pub async fn list_and_find() {
     let alpine_id = id_of("alpine");
     let server = Routes::new()
         .on("GET", "/v2/templates", 200, data("templates.json"))
@@ -111,27 +111,27 @@ fn list_and_find() {
         .start();
     let c = conn(&server);
 
-    let all = Template::list(&c).unwrap();
+    let all = Template::list(&c).await.unwrap();
     assert_eq!(all.len(), 11);
     assert!(all.iter().all(|t| t.connector.is_some()));
     assert_eq!(all.iter().filter(|t| t.is_builtin()).count(), 7);
     assert_eq!(all[0].name.as_str(), "IOU-L3");
 
-    let by_n = Template::find(&c, Lookup::Name("alpine")).unwrap().unwrap();
+    let by_n = Template::find(&c, Lookup::Name("alpine")).await.unwrap().unwrap();
     assert_eq!(by_n.template_id.as_deref(), Some(alpine_id.as_str()));
-    let by_i = Template::find(&c, Lookup::Id(&alpine_id)).unwrap().unwrap();
+    let by_i = Template::find(&c, Lookup::Id(&alpine_id)).await.unwrap().unwrap();
     assert_eq!(by_i.name.as_str(), "alpine");
-    assert!(Template::find(&c, Lookup::Name("ghost")).unwrap().is_none());
+    assert!(Template::find(&c, Lookup::Name("ghost")).await.unwrap().is_none());
     assert!(matches!(
-        Template::find(&c, Lookup::Id("missing")),
+        Template::find(&c, Lookup::Id("missing")).await,
         Err(Error::Api { status: 404, .. })
     ));
 }
 
 // ---------------------------------------------------------------- get
 
-#[test]
-fn get_resolves_id_from_name() {
+#[tokio::test]
+pub async fn get_resolves_id_from_name() {
     let id = id_of("vEOS");
     let server = Routes::new()
         .on("GET", "/v2/templates", 200, data("templates.json"))
@@ -142,7 +142,7 @@ fn get_resolves_id_from_name() {
         "vEOS",
         TemplateKind::Qemu(QemuTemplate::default()),
     );
-    t.get().unwrap();
+    t.get().await.unwrap();
     assert_eq!(t.template_id.as_deref(), Some(id.as_str()));
     assert_eq!(t.template_type(), TemplateType::Qemu);
     assert_eq!(
@@ -153,18 +153,18 @@ fn get_resolves_id_from_name() {
 
     // second call goes straight to the id
     let before = server.count("GET", "/v2/templates");
-    t.get().unwrap();
+    t.get().await.unwrap();
     assert_eq!(server.count("GET", "/v2/templates"), before);
 }
 
-#[test]
-fn get_errors() {
+#[tokio::test]
+pub async fn get_errors() {
     let server = Routes::new().on("GET", "/v2/templates", 200, data("templates.json")).start();
     let c = conn(&server);
 
     let mut missing_connector: Template =
         serde_json::from_value(by_name("alpine")).unwrap();
-    assert!(matches!(missing_connector.get(), Err(Error::MissingConnector)));
+    assert!(matches!(missing_connector.get().await, Err(Error::MissingConnector)));
 
     let mut ghost = Template::new(
         c,
@@ -172,7 +172,7 @@ fn get_errors() {
         TemplateKind::Docker(DockerTemplate::default()),
     );
     assert!(matches!(
-        ghost.get(),
+        ghost.get().await,
         Err(Error::NotFound(m)) if m == "Template not found: ghost"
     ));
 }
@@ -187,8 +187,8 @@ fn created_response() -> Value {
     })
 }
 
-#[test]
-fn create_posts_typed_and_extra_fields() {
+#[tokio::test]
+pub async fn create_posts_typed_and_extra_fields() {
     let server = Routes::new()
         .on("GET", "/v2/templates", 200, data("templates.json"))
         .on("POST", "/v2/templates", 201, created_response().to_string())
@@ -204,7 +204,7 @@ fn create_posts_typed_and_extra_fields() {
         docker.adapters = Some(2);
     }
     t.console_type = Some(ConsoleType::Telnet);
-    t.create().unwrap();
+    t.create().await.unwrap();
 
     assert_eq!(
         server.last_json("POST", "/v2/templates"),
@@ -220,8 +220,8 @@ fn create_posts_typed_and_extra_fields() {
     assert!(t.connector.is_some());
 }
 
-#[test]
-fn create_keeps_an_explicit_compute_id() {
+#[tokio::test]
+pub async fn create_keeps_an_explicit_compute_id() {
     let server = Routes::new()
         .on("GET", "/v2/templates", 200, "[]")
         .on("POST", "/v2/templates", 201, created_response().to_string())
@@ -229,12 +229,13 @@ fn create_keeps_an_explicit_compute_id() {
     Template::new(conn(&server), "x", TemplateKind::Vpcs(VpcsTemplate::default()))
         .with_compute_id("remote-1")
         .create()
+        .await
         .unwrap();
     assert_eq!(server.last_json("POST", "/v2/templates")["compute_id"], "remote-1");
 }
 
-#[test]
-fn create_validations() {
+#[tokio::test]
+pub async fn create_validations() {
     let server = Routes::new()
         .on("GET", "/v2/templates", 200, data("templates.json"))
         .on("POST", "/v2/templates", 201, created_response().to_string())
@@ -244,23 +245,23 @@ fn create_validations() {
     // A Template constructed from server data has no connector until one is attached.
     let mut missing_connector: Template = serde_json::from_value(by_name("alpine")).unwrap();
     missing_connector.template_id = None;
-    assert!(matches!(missing_connector.create(), Err(Error::MissingConnector)));
+    assert!(matches!(missing_connector.create().await, Err(Error::MissingConnector)));
 
     // name already used on the server
     assert!(matches!(
-        Template::new(c.clone(), "alpine", TemplateKind::Docker(DockerTemplate::default())).create(),
+        Template::new(c.clone(), "alpine", TemplateKind::Docker(DockerTemplate::default())).create().await,
         Err(Error::InvalidInput(m)) if m == "Template already used: alpine"
     ));
 
     // already created
     let mut done = Template::new(c, "fresh", TemplateKind::Docker(DockerTemplate::default()));
-    done.create().unwrap();
-    assert!(matches!(done.create(), Err(Error::InvalidInput(m)) if m == "Template already created"));
+    done.create().await.unwrap();
+    assert!(matches!(done.create().await, Err(Error::InvalidInput(m)) if m == "Template already created"));
     assert_eq!(server.count("POST", "/v2/templates"), 1);
 }
 
-#[test]
-fn save_sends_the_whole_local_template() {
+#[tokio::test]
+pub async fn save_sends_the_whole_local_template() {
     let id = id_of("alpine");
     let mut stored = by_name("alpine");
     stored["start_command"] = json!("sh");
@@ -269,10 +270,10 @@ fn save_sends_the_whole_local_template() {
         .on("PUT", &path(&id), 200, stored.to_string())
         .start();
     let c = conn(&server);
-    let mut t = Template::find(&c, Lookup::Id(&id)).unwrap().unwrap();
+    let mut t = Template::find(&c, Lookup::Id(&id)).await.unwrap().unwrap();
     t.kind.as_docker_mut().unwrap().start_command = Some(String::from("sh"));
     t.symbol = Some(":/symbols/docker.svg".into());
-    t.save().unwrap();
+    t.save().await.unwrap();
 
     let body = server.last_json("PUT", &path(&id));
     assert_eq!(body["start_command"], "sh");
@@ -287,8 +288,8 @@ fn save_sends_the_whole_local_template() {
     );
 }
 
-#[test]
-fn save_updates_typed_fields() {
+#[tokio::test]
+pub async fn save_updates_typed_fields() {
     let id = id_of("vEOS");
     let mut after = by_name("vEOS");
     after["ram"] = json!(4096);
@@ -298,9 +299,9 @@ fn save_updates_typed_fields() {
         .start();
 
     let c = conn(&server);
-    let mut t = Template::find(&c, Lookup::Id(&id)).unwrap().unwrap();
+    let mut t = Template::find(&c, Lookup::Id(&id)).await.unwrap().unwrap();
     t.kind.as_qemu_mut().unwrap().ram = Some(4096);
-    t.save().unwrap();
+    t.save().await.unwrap();
 
     let body = server.last_json("PUT", &path(&id));
     assert_eq!(body["ram"], 4096);
@@ -310,14 +311,14 @@ fn save_updates_typed_fields() {
     assert_eq!(t.template_id.as_deref(), Some(id.as_str()));
 }
 
-#[test]
-fn builtin_templates_cannot_be_modified_or_deleted() {
+#[tokio::test]
+pub async fn builtin_templates_cannot_be_modified_or_deleted() {
     let server = Routes::new().start();
     let mut cloud: Template = serde_json::from_value(by_name("Cloud")).unwrap();
     cloud.connector = Some(conn(&server));
     for err in [
-        cloud.save().unwrap_err(),
-        cloud.delete().unwrap_err(),
+        cloud.save().await.unwrap_err(),
+        cloud.delete().await.unwrap_err(),
     ] {
         assert!(matches!(err, Error::InvalidInput(ref m) if m.contains("built-in template Cloud")), "{err}");
     }
@@ -326,8 +327,8 @@ fn builtin_templates_cannot_be_modified_or_deleted() {
 
 // ---------------------------------------------------------------- delete
 
-#[test]
-fn delete_by_id_and_by_name() {
+#[tokio::test]
+pub async fn delete_by_id_and_by_name() {
     let id = id_of("alpine");
     let server = Routes::new()
         .on("GET", "/v2/templates", 200, data("templates.json"))
@@ -341,7 +342,7 @@ fn delete_by_id_and_by_name() {
         TemplateKind::Docker(DockerTemplate::default()),
     )
         .with_template_id(id.as_str());
-    by_id.delete().unwrap();
+    by_id.delete().await.unwrap();
     assert!(by_id.template_id.is_none());
     assert_eq!(by_id.name, "");
 
@@ -350,20 +351,20 @@ fn delete_by_id_and_by_name() {
         "alpine",
         TemplateKind::Docker(DockerTemplate::default()),
     );
-    by_n.delete().unwrap();
+    by_n.delete().await.unwrap();
     assert_eq!(server.count("DELETE", &path(&id)), 2);
     assert!(by_n.template_id.is_none());
     assert_eq!(by_n.name, "alpine");
 }
 
-#[test]
-fn server_errors_surface_and_leave_the_object_intact() {
+#[tokio::test]
+pub async fn server_errors_surface_and_leave_the_object_intact() {
     let id = id_of("alpine");
     let server = Routes::new()
         .on("DELETE", &path(&id), 409, r#"{"status": 409, "message": "Template is used"}"#)
         .start();
     let mut t = Template::new(conn(&server), "alpine", TemplateKind::Qemu(QemuTemplate::default())).with_template_id(id.as_str());
-    match t.delete().unwrap_err() {
+    match t.delete().await.unwrap_err() {
         Error::Api { status, message } => {
             assert_eq!((status, message.as_str()), (409, "Template is used"));
         }
@@ -375,8 +376,8 @@ fn server_errors_surface_and_leave_the_object_intact() {
 
 // ---------------------------------------------------------------- with nodes
 
-#[test]
-fn a_template_can_seed_a_node() {
+#[tokio::test]
+pub async fn a_template_can_seed_a_node() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let alpine_id = id_of("alpine");
     let fresh = json!({"name": "a1", "node_id": "n1", "node_type": "docker", "status": "stopped", "compute_id": "local"});
@@ -386,13 +387,13 @@ fn a_template_can_seed_a_node() {
         .on("PUT", &format!("{p}/nodes/n1"), 200, fresh.to_string())
         .start();
     let c = conn(&server);
-    let template = Template::find(&c, Lookup::Name("alpine")).unwrap().unwrap();
+    let template = Template::find(&c, Lookup::Name("alpine")).await.unwrap().unwrap();
 
     let mut node = Node::with_connector(c)
         .with_project_id(PROJECT_ID)
         .with_name("a1")
         .with_template_id(template.template_id.clone().unwrap());
-    node.create().unwrap();
+    node.create().await.unwrap();
     assert_eq!(node.node_id.as_deref(), Some("n1"));
     assert_eq!(server.count("POST", &format!("{p}/templates/{alpine_id}")), 1);
 }

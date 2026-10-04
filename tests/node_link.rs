@@ -30,8 +30,8 @@ fn links_of_alpine() -> String {
 
 // ---------------------------------------------------------------- Node
 
-#[test]
-fn node_get_resolves_id_from_name_and_loads_links() {
+#[tokio::test]
+pub async fn node_get_resolves_id_from_name_and_loads_links() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let server = Routes::new()
         .on("GET", &format!("{p}/nodes"), 200, data("nodes.json"))
@@ -39,7 +39,7 @@ fn node_get_resolves_id_from_name_and_loads_links() {
         .on("GET", &format!("{}/links", node_path()), 200, links_of_alpine())
         .start();
     let mut node = Node::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_name("alpine-1");
-    node.get().unwrap();
+    node.get().await.unwrap();
 
     assert_eq!(node.node_id.as_deref(), Some(ALPINE_ID));
     assert_eq!(node.node_type, Some(NodeType::Docker));
@@ -56,16 +56,16 @@ fn node_get_resolves_id_from_name_and_loads_links() {
     assert!(node.connector.is_some());
 }
 
-#[test]
-fn node_get_without_links() {
+#[tokio::test]
+pub async fn node_get_without_links() {
     let server = Routes::new().on("GET", &node_path(), 200, alpine().to_string()).start();
     let mut node = Node::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_node_id(ALPINE_ID);
-    node.get_with_links(false).unwrap();
+    node.get_with_links(false).await.unwrap();
     assert_eq!(server.calls(), vec![format!("GET {}", node_path())]);
 }
 
-#[test]
-fn node_precondition_errors() {
+#[tokio::test]
+pub async fn node_precondition_errors() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let server = Routes::new()
         .on("GET", &format!("{p}/nodes"), 200, json!([
@@ -74,27 +74,27 @@ fn node_precondition_errors() {
         .start();
     let c = conn(&server);
 
-    assert!(matches!(Node::default().get(), Err(Error::MissingConnector)));
+    assert!(matches!(Node::default().get().await, Err(Error::MissingConnector)));
     assert!(matches!(
-        Node::with_connector(c.clone()).with_name("x").get(),
+        Node::with_connector(c.clone()).with_name("x").get().await,
         Err(Error::InvalidInput(m)) if m == "Need to submit project_id"
     ));
     assert!(matches!(
-        Node::with_connector(c.clone()).with_project_id(PROJECT_ID).get(),
+        Node::with_connector(c.clone()).with_project_id(PROJECT_ID).get().await,
         Err(Error::InvalidInput(m)) if m == "Need to either submit node_id or name"
     ));
     assert!(matches!(
-        Node::with_connector(c.clone()).with_project_id(PROJECT_ID).with_name("dup").get(),
+        Node::with_connector(c.clone()).with_project_id(PROJECT_ID).with_name("dup").get().await,
         Err(Error::InvalidInput(m)) if m.starts_with("Multiple nodes found")
     ));
     assert!(matches!(
-        Node::with_connector(c).with_project_id(PROJECT_ID).with_name("none").get(),
+        Node::with_connector(c).with_project_id(PROJECT_ID).with_name("none").get().await,
         Err(Error::NotFound(_))
     ));
 }
 
-#[test]
-fn node_power_actions_update_status() {
+#[tokio::test]
+pub async fn node_power_actions_update_status() {
     let server = Routes::new()
         .on("POST", &format!("{}/stop", node_path()), 200, with_status("stopped"))
         .on("POST", &format!("{}/start", node_path()), 200, with_status("started"))
@@ -102,33 +102,33 @@ fn node_power_actions_update_status() {
         .on("POST", &format!("{}/reload", node_path()), 200, with_status("started"))
         .start();
     let mut node = Node::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_node_id(ALPINE_ID);
-    node.stop().unwrap();
+    node.stop().await.unwrap();
     assert_eq!(node.status, Some(NodeStatus::Stopped));
-    node.start().unwrap();
+    node.start().await.unwrap();
     assert_eq!(node.status, Some(NodeStatus::Started));
-    node.suspend().unwrap();
+    node.suspend().await.unwrap();
     assert_eq!(node.status, Some(NodeStatus::Suspended));
-    node.reload().unwrap();
+    node.reload().await.unwrap();
     assert_eq!(node.status, Some(NodeStatus::Started));
     // answers already carried the expected status, so no extra GET was needed
     assert_eq!(server.count("GET", &node_path()), 0);
 }
 
-#[test]
-fn node_action_refetches_when_status_is_not_final() {
+#[tokio::test]
+pub async fn node_action_refetches_when_status_is_not_final() {
     let server = Routes::new()
         .on("POST", &format!("{}/start", node_path()), 200, with_status("stopped"))
         .on("GET", &node_path(), 200, with_status("started"))
         .on("GET", &format!("{}/links", node_path()), 200, "[]")
         .start();
     let mut node = Node::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_node_id(ALPINE_ID);
-    node.start().unwrap();
+    node.start().await.unwrap();
     assert_eq!(node.status, Some(NodeStatus::Started));
     assert_eq!(server.count("GET", &node_path()), 1);
 }
 
-#[test]
-fn node_update_and_delete() {
+#[tokio::test]
+pub async fn node_update_and_delete() {
     let mut moved = alpine();
     moved["x"] = json!(42);
     let server = Routes::new()
@@ -141,15 +141,15 @@ fn node_update_and_delete() {
         x: Some(42),
         ..Default::default()
     };
-    node.update(&patch).unwrap();
+    node.update(&patch).await.unwrap();
     assert_eq!(node.x, Some(42));
     assert_eq!(server.last_json("PUT", &node_path()), json!({"x": 42}));
-    node.delete().unwrap();
+    node.delete().await.unwrap();
     assert!(node.project_id.is_none() && node.node_id.is_none() && node.name.is_none());
 }
 
-#[test]
-fn node_create_from_template_name() {
+#[tokio::test]
+pub async fn node_create_from_template_name() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let fresh = json!({"name": "Alpine-9", "node_id": "n9", "node_type": "docker",
                        "status": "stopped", "compute_id": "local"});
@@ -163,7 +163,7 @@ fn node_create_from_template_name() {
         .with_name("my-alpine")
         .with_template("alpine");
     node.x = Some(10);
-    node.create().unwrap();
+    node.create().await.unwrap();
 
     assert_eq!(node.template_id.as_deref(), Some(TEMPLATE_ID));
     assert_eq!(node.node_id.as_deref(), Some("n9"));
@@ -177,31 +177,31 @@ fn node_create_from_template_name() {
     );
 
     // creating twice is rejected
-    assert!(matches!(node.create(), Err(Error::InvalidInput(m)) if m == "Node already created"));
+    assert!(matches!(node.create().await, Err(Error::InvalidInput(m)) if m == "Node already created"));
 }
 
-#[test]
-fn node_create_errors() {
+#[tokio::test]
+pub async fn node_create_errors() {
     let server = Routes::new().on("GET", "/v2/templates", 200, data("templates.json")).start();
     let c = conn(&server);
     let base = || Node::with_connector(c.clone()).with_project_id(PROJECT_ID).with_name("n");
-    assert!(matches!(base().create(), Err(Error::InvalidInput(m)) if m == "Need either 'template' of 'template_id'"));
-    assert!(matches!(base().with_template("ghost").create(), Err(Error::InvalidInput(m)) if m == "Template ghost not found"));
+    assert!(matches!(base().create().await, Err(Error::InvalidInput(m)) if m == "Need either 'template' of 'template_id'"));
+    assert!(matches!(base().with_template("ghost").create().await, Err(Error::InvalidInput(m)) if m == "Template ghost not found"));
     let mut no_project = Node::with_connector(c.clone()).with_template("alpine");
-    assert!(matches!(no_project.create(), Err(Error::InvalidInput(_))));
-    assert!(matches!(Node::default().create(), Err(Error::MissingConnector)));
+    assert!(matches!(no_project.create().await, Err(Error::InvalidInput(_))));
+    assert!(matches!(Node::default().create().await, Err(Error::MissingConnector)));
 }
 
-#[test]
-fn node_files() {
+#[tokio::test]
+pub async fn node_files() {
     let f = format!("{}/files/config/start.sh", node_path());
     let server = Routes::new()
         .on("GET", &f, 200, "echo hi")
         .on("POST", &f, 201, "")
         .start();
     let mut node = Node::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_node_id(ALPINE_ID);
-    assert_eq!(node.get_file("config/start.sh").unwrap(), "echo hi");
-    node.write_file("config/start.sh", b"echo bye".to_vec()).unwrap();
+    assert_eq!(node.get_file("config/start.sh").await.unwrap(), "echo hi");
+    node.write_file("config/start.sh", b"echo bye".to_vec()).await.unwrap();
     assert_eq!(server.recorded().last().unwrap().body, "echo bye");
 }
 
@@ -221,8 +221,8 @@ fn link_path() -> String {
     format!("/v2/projects/{PROJECT_ID}/links/{LINK_ID}")
 }
 
-#[test]
-fn link_get_update_delete() {
+#[tokio::test]
+pub async fn link_get_update_delete() {
     let mut suspended = link_json();
     suspended["suspend"] = json!(true);
     let server = Routes::new()
@@ -232,7 +232,7 @@ fn link_get_update_delete() {
         .start();
     let mut link = Link::with_connector(conn(&server)).with_project_id(PROJECT_ID).with_link_id(LINK_ID);
 
-    link.get().unwrap();
+    link.get().await.unwrap();
     assert_eq!(link.link_type, Some(LinkType::Ethernet));
     assert_eq!(link.suspend, Some(false));
     assert_eq!(link.capturing, Some(false));
@@ -247,23 +247,23 @@ fn link_get_update_delete() {
         nodes: None,
         suspend: Some(true),
     };
-    link.update(&patch).unwrap();
+    link.update(&patch).await.unwrap();
     assert_eq!(link.suspend, Some(true));
     assert_eq!(server.last_json("PUT", &link_path()), json!({"suspend": true}));
 
-    link.delete().unwrap();
+    link.delete().await.unwrap();
     assert!(link.project_id.is_none() && link.link_id.is_none());
-    assert!(matches!(link.get(), Err(Error::InvalidInput(_))));
+    assert!(matches!(link.get().await, Err(Error::InvalidInput(_))));
 }
 
-#[test]
-fn link_create_posts_nodes_and_project() {
+#[tokio::test]
+pub async fn link_create_posts_nodes_and_project() {
     let server = Routes::new()
         .on("POST", &format!("/v2/projects/{PROJECT_ID}/links"), 201, link_json().to_string())
         .start();
     let mut link = Link::with_connector(conn(&server)).with_project_id(PROJECT_ID);
     link.nodes = Some(serde_json::from_value(link_json()["nodes"].clone()).unwrap());
-    link.create().unwrap();
+    link.create().await.unwrap();
     assert_eq!(link.link_id.as_deref(), Some(LINK_ID));
 
     let body = server.last_json("POST", &format!("/v2/projects/{PROJECT_ID}/links"));
@@ -273,19 +273,19 @@ fn link_create_posts_nodes_and_project() {
     assert!(body.get("connector").is_none());
 }
 
-#[test]
-fn link_preconditions() {
-    assert!(matches!(Link::default().get(), Err(Error::MissingConnector)));
-    assert!(matches!(Link::default().create(), Err(Error::MissingConnector)));
+#[tokio::test]
+pub async fn link_preconditions() {
+    assert!(matches!(Link::default().get().await, Err(Error::MissingConnector)));
+    assert!(matches!(Link::default().create().await, Err(Error::MissingConnector)));
     let server = Routes::new().start();
     let mut l = Link::with_connector(conn(&server)).with_project_id(PROJECT_ID);
-    assert!(matches!(l.get(), Err(Error::InvalidInput(m)) if m == "Need to submit link_id"));
+    assert!(matches!(l.get().await, Err(Error::InvalidInput(m)) if m == "Need to submit link_id"));
 }
 
 // ---------------------------------------------------------------- types / validation
 
-#[test]
-fn invalid_enum_values_are_rejected() {
+#[tokio::test]
+pub async fn invalid_enum_values_are_rejected() {
     let bad_type = serde_json::from_value::<Node>(json!({"node_type": "toaster"}));
     assert!(bad_type.is_err());
     let bad_console = serde_json::from_value::<Node>(json!({"console_type": "smoke-signals"}));
@@ -303,13 +303,13 @@ fn invalid_enum_values_are_rejected() {
         x: Some(1),
         ..Default::default()
     };
-    assert!(matches!(node.update(&patch), Err(Error::Json(_))));
+    assert!(matches!(node.update(&patch).await, Err(Error::Json(_))));
     assert_eq!(node.status, Some(NodeStatus::Started), "failed update leaves the node untouched");
     assert!(node.connector.is_some());
 }
 
-#[test]
-fn enum_wire_names() {
+#[tokio::test]
+pub async fn enum_wire_names() {
     assert_eq!(serde_json::to_value(ConsoleType::SpiceAgent).unwrap(), json!("spice+agent"));
     assert_eq!(serde_json::to_value(ConsoleType::NoConsole).unwrap(), json!("none"));
     assert_eq!(serde_json::from_value::<ConsoleType>(json!("null")).unwrap(), ConsoleType::Null);
@@ -319,8 +319,8 @@ fn enum_wire_names() {
     assert_eq!(NodeStatus::Suspended.to_string(), "suspended");
 }
 
-#[test]
-fn every_python_node_and_console_type_is_accepted() {
+#[tokio::test]
+pub async fn every_python_node_and_console_type_is_accepted() {
     for t in [
         "cloud", "nat", "ethernet_hub", "ethernet_switch", "frame_relay_switch", "atm_switch",
         "docker", "dynamips", "vpcs", "traceng", "virtualbox", "vmware", "iou", "qemu",
@@ -334,8 +334,8 @@ fn every_python_node_and_console_type_is_accepted() {
     }
 }
 
-#[test]
-fn every_fixture_node_and_link_deserializes_and_ports_keep_unknown_fields() {
+#[tokio::test]
+pub async fn every_fixture_node_and_link_deserializes_and_ports_keep_unknown_fields() {
     for n in json("nodes.json").as_array().unwrap() {
         let node: Node = serde_json::from_value(n.clone()).unwrap();
         assert_eq!(node.name.as_deref(), n["name"].as_str());

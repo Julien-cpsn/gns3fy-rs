@@ -38,11 +38,11 @@ fn project(server: &MockServer) -> Project {
     Project::with_connector(conn).with_name("API_TEST")
 }
 
-#[test]
-fn get_loads_project_stats_snapshots_drawings_nodes_links() {
+#[tokio::test]
+pub async fn get_loads_project_stats_snapshots_drawings_nodes_links() {
     let server = lab_routes().start();
     let mut lab = project(&server);
-    lab.get().unwrap();
+    lab.get().await.unwrap();
 
     assert_eq!(lab.project_id.as_deref(), Some(PROJECT_ID));
     assert_eq!(lab.status, Some(ProjectStatus::Opened));
@@ -55,41 +55,41 @@ fn get_loads_project_stats_snapshots_drawings_nodes_links() {
     // children inherit the connector and project id
     assert!(lab.nodes.iter().all(|n| n.connector.is_some() && n.project_id.as_deref() == Some(PROJECT_ID)));
     assert!(lab.links.iter().all(|l| l.connector.is_some() && l.project_id.as_deref() == Some(PROJECT_ID)));
-    let alpine = lab.get_node(Lookup::Name("alpine-1")).unwrap().unwrap();
+    let alpine = lab.get_node(Lookup::Name("alpine-1")).await.unwrap().unwrap();
     assert_eq!(alpine.node_type, Some(NodeType::Docker));
     assert_eq!(alpine.console_type, Some(ConsoleType::Telnet));
 }
 
-#[test]
-fn get_can_skip_related_objects() {
+#[tokio::test]
+pub async fn get_can_skip_related_objects() {
     let server = lab_routes().start();
     let mut lab = project(&server);
-    lab.get_with(false, false, false).unwrap();
+    lab.get_with(false, false, false).await.unwrap();
     assert!(lab.nodes.is_empty() && lab.links.is_empty() && lab.stats.is_none());
     assert_eq!(server.count("GET", &format!("/v2/projects/{PROJECT_ID}/nodes")), 0);
 }
 
-#[test]
-fn get_errors() {
+#[tokio::test]
+pub async fn get_errors() {
     let server = lab_routes().start();
     let conn = Arc::new(Gns3Connector::new(&server.url).unwrap());
 
     let mut no_conn = Project::default().with_name("x");
-    assert!(matches!(no_conn.get(), Err(Error::MissingConnector)));
+    assert!(matches!(no_conn.get().await, Err(Error::MissingConnector)));
 
     let mut no_ident = Project::with_connector(conn.clone());
-    assert!(matches!(no_ident.get(), Err(Error::InvalidInput(_))));
+    assert!(matches!(no_ident.get().await, Err(Error::InvalidInput(_))));
 
     let mut unknown = Project::with_connector(conn).with_name("does-not-exist");
-    assert!(matches!(unknown.get(), Err(Error::NotFound(_))));
+    assert!(matches!(unknown.get().await, Err(Error::NotFound(_))));
 }
 
-#[test]
-fn summaries_and_inventory() {
+#[tokio::test]
+pub async fn summaries_and_inventory() {
     let server = lab_routes().start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
 
-    let nodes = lab.nodes_summary().unwrap();
+    let nodes = lab.nodes_summary().await.unwrap();
     assert_eq!(nodes.len(), 6);
     assert_eq!(nodes[0].name.as_deref(), Some("Ethernetswitch-1"));
     assert_eq!(nodes[0].console, Some(5000));
@@ -97,7 +97,7 @@ fn summaries_and_inventory() {
     assert_eq!(nodes[0].to_string(), format!("Ethernetswitch-1: started -- Console: 5000 -- ID: {SWITCH_ID}"));
     assert_eq!(nodes[5].console, None); // Cloud-1 has no console
 
-    let inv = lab.nodes_inventory().unwrap();
+    let inv = lab.nodes_inventory().await.unwrap();
     assert_eq!(inv.len(), 6);
     let alpine = &inv["alpine-1"];
     assert_eq!(alpine.server.as_deref(), Some("127.0.0.1"));
@@ -107,7 +107,7 @@ fn summaries_and_inventory() {
     let as_json = serde_json::to_value(alpine).unwrap();
     assert_eq!(as_json["type"], "docker");
 
-    let links = lab.links_summary().unwrap();
+    let links = lab.links_summary().await.unwrap();
     // 7 links in the fixture, 2 of them have no endpoints
     let rows: Vec<_> = links
         .iter()
@@ -126,18 +126,18 @@ fn summaries_and_inventory() {
     assert_eq!(links[3].to_string(), "vEOS: Ethernet1 ---- alpine-1: eth0");
 }
 
-#[test]
-fn get_node_by_id_and_unknown() {
+#[tokio::test]
+pub async fn get_node_by_id_and_unknown() {
     let server = lab_routes().start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
-    assert_eq!(lab.get_node(Lookup::Id(ALPINE_ID)).unwrap().unwrap().name.as_deref(), Some("alpine-1"));
-    assert!(lab.get_node(Lookup::Name("ghost")).unwrap().is_none());
-    assert!(lab.get_link(LINK_ID).unwrap().is_some());
-    assert!(lab.get_link("nope").unwrap().is_none());
+    assert_eq!(lab.get_node(Lookup::Id(ALPINE_ID)).await.unwrap().unwrap().name.as_deref(), Some("alpine-1"));
+    assert!(lab.get_node(Lookup::Name("ghost")).await.unwrap().is_none());
+    assert!(lab.get_link(LINK_ID).await.unwrap().is_some());
+    assert!(lab.get_link("nope").await.unwrap().is_none());
 }
 
-#[test]
-fn lifecycle_open_close_update_delete() {
+#[tokio::test]
+pub async fn lifecycle_open_close_update_delete() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let closed = {
         let mut v = api_test_project();
@@ -156,54 +156,54 @@ fn lifecycle_open_close_update_delete() {
         .start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
 
-    lab.close().unwrap();
+    lab.close().await.unwrap();
     assert_eq!(lab.status, Some(ProjectStatus::Closed));
-    lab.open().unwrap();
+    lab.open().await.unwrap();
     assert_eq!(lab.status, Some(ProjectStatus::Opened));
     let patch = ProjectUpdate {
         auto_close: Some(true),
         ..Default::default()
     };
-    lab.update(&patch).unwrap();
+    lab.update(&patch).await.unwrap();
     assert_eq!(lab.auto_close, Some(true));
     assert_eq!(server.last_json("PUT", &p), json!({"auto_close": true}));
-    lab.delete().unwrap();
+    lab.delete().await.unwrap();
     assert!(lab.project_id.is_none() && lab.name.is_none());
     // After deletion further calls need a project id again
-    assert!(matches!(lab.get_stats(), Err(Error::InvalidInput(_))));
+    assert!(matches!(lab.get_stats().await, Err(Error::InvalidInput(_))));
 }
 
-#[test]
-fn create_posts_set_attributes_only() {
+#[tokio::test]
+pub async fn create_posts_set_attributes_only() {
     let server = Routes::new()
         .on("POST", "/v2/projects", 201, api_test_project().to_string())
         .start();
     let mut lab = project(&server);
     lab.auto_close = Some(false);
-    lab.create().unwrap();
+    lab.create().await.unwrap();
     assert_eq!(server.last_json("POST", "/v2/projects"), json!({"name": "API_TEST", "auto_close": false}));
     assert_eq!(lab.project_id.as_deref(), Some(PROJECT_ID));
 
     let mut nameless = Project::with_connector(lab.connector.clone().unwrap());
-    assert!(matches!(nameless.create(), Err(Error::InvalidInput(_))));
+    assert!(matches!(nameless.create().await, Err(Error::InvalidInput(_))));
 }
 
-#[test]
-fn project_files() {
+#[tokio::test]
+pub async fn project_files() {
     let p = format!("/v2/projects/{PROJECT_ID}/files/project-files/docker/x/config.txt");
     let server = Routes::new()
         .on("GET", &p, 200, data("files.txt"))
         .on("POST", &p, 201, "")
         .start();
     let lab = project(&server).with_project_id(PROJECT_ID);
-    let text = lab.get_file("project-files/docker/x/config.txt").unwrap();
+    let text = lab.get_file("project-files/docker/x/config.txt").await.unwrap();
     assert!(text.starts_with('#'));
-    lab.write_file("project-files/docker/x/config.txt", "hostname r1").unwrap();
+    lab.write_file("project-files/docker/x/config.txt", "hostname r1").await.unwrap();
     assert_eq!(server.recorded().last().unwrap().body, "hostname r1");
 }
 
-#[test]
-fn bulk_node_actions_refresh_nodes() {
+#[tokio::test]
+pub async fn bulk_node_actions_refresh_nodes() {
     let p = format!("/v2/projects/{PROJECT_ID}/nodes");
     let server = lab_routes()
         .on("POST", &format!("{p}/start"), 204, "")
@@ -212,16 +212,16 @@ fn bulk_node_actions_refresh_nodes() {
         .on("POST", &format!("{p}/suspend"), 204, "")
         .start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
-    lab.start_nodes(ZERO).unwrap();
-    lab.stop_nodes(ZERO).unwrap();
-    lab.reload_nodes(ZERO).unwrap();
-    lab.suspend_nodes(ZERO).unwrap();
+    lab.start_nodes(ZERO).await.unwrap();
+    lab.stop_nodes(ZERO).await.unwrap();
+    lab.reload_nodes(ZERO).await.unwrap();
+    lab.suspend_nodes(ZERO).await.unwrap();
     assert_eq!(server.count("GET", &p), 4);
     assert_eq!(lab.nodes.len(), 6);
 }
 
-#[test]
-fn create_link_validates_and_posts_endpoints() {
+#[tokio::test]
+pub async fn create_link_validates_and_posts_endpoints() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let created = json!({
         "link_id": "new-link", "link_type": "ethernet", "project_id": PROJECT_ID,
@@ -231,11 +231,11 @@ fn create_link_validates_and_posts_endpoints() {
     let mut lab = project(&server).with_project_id(PROJECT_ID);
 
     // unknown node / port
-    let err = lab.create_link("ghost", "eth0", "alpine-1", "eth1").unwrap_err();
+    let err = lab.create_link("ghost", "eth0", "alpine-1", "eth1").await.unwrap_err();
     assert_eq!(err.to_string(), "node_a: ghost not found");
-    let err = lab.create_link("alpine-1", "eth9", "IOU1", "Ethernet0/1").unwrap_err();
+    let err = lab.create_link("alpine-1", "eth9", "IOU1", "Ethernet0/1").await.unwrap_err();
     assert_eq!(err.to_string(), "port_a: eth9 not found");
-    let err = lab.create_link("alpine-1", "eth1", "IOU1", "Ethernet9/9").unwrap_err();
+    let err = lab.create_link("alpine-1", "eth1", "IOU1", "Ethernet9/9").await.unwrap_err();
     assert_eq!(err.to_string(), "port_b: Ethernet9/9 not found");
 
     // port already used: by endpoint A, by endpoint B, and in reversed orientation
@@ -244,13 +244,13 @@ fn create_link_validates_and_posts_endpoints() {
         ("alpine-1", "eth1", "vEOS", "Ethernet1"),
         ("alpine-1", "eth1", "Ethernetswitch-1", "Ethernet7"),
     ] {
-        let err = lab.create_link(a, pa, b, pb).unwrap_err();
+        let err = lab.create_link(a, pa, b, pb).await.unwrap_err();
         assert!(err.to_string().starts_with("At least one port is used, ID: "), "{err}");
     }
     assert_eq!(server.count("POST", &format!("{p}/links")), 0);
 
     let before = lab.links.len();
-    let link = lab.create_link("alpine-1", "eth1", "IOU1", "Ethernet0/1").unwrap();
+    let link = lab.create_link("alpine-1", "eth1", "IOU1", "Ethernet0/1").await.unwrap();
     assert_eq!(link.link_id.as_deref(), Some("new-link"));
     assert_eq!(lab.links.len(), before + 1);
 
@@ -264,8 +264,8 @@ fn create_link_validates_and_posts_endpoints() {
     assert_eq!(body["nodes"][1]["label"], json!({"text": "Ethernet0/1"}));
 }
 
-#[test]
-fn delete_link_in_either_orientation() {
+#[tokio::test]
+pub async fn delete_link_in_either_orientation() {
     let d7 = "d7dd01d6-9577-4076-b7f2-911b231044f8";
     let p = format!("/v2/projects/{PROJECT_ID}");
     let server = lab_routes()
@@ -274,16 +274,16 @@ fn delete_link_in_either_orientation() {
     let mut lab = project(&server).with_project_id(PROJECT_ID);
 
     // fixture orientation is IOU1/Ethernet0/0 -> switch/Ethernet1; delete using the reverse
-    lab.delete_link("Ethernetswitch-1", "Ethernet1", "IOU1", "Ethernet0/0").unwrap();
+    lab.delete_link("Ethernetswitch-1", "Ethernet1", "IOU1", "Ethernet0/0").await.unwrap();
     assert_eq!(server.count("DELETE", &format!("{p}/links/{d7}")), 1);
     assert!(lab.links.iter().all(|l| l.link_id.as_deref() != Some(d7)));
 
-    let err = lab.delete_link("alpine-1", "eth1", "IOU1", "Ethernet0/1").unwrap_err();
+    let err = lab.delete_link("alpine-1", "eth1", "IOU1", "Ethernet0/1").await.unwrap_err();
     assert!(err.to_string().starts_with("Link not found"), "{err}");
 }
 
-#[test]
-fn create_node_from_template() {
+#[tokio::test]
+pub async fn create_node_from_template() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let created = json!({"name": "alpine-2", "node_id": "new-node", "node_type": "docker",
                          "status": "stopped", "console": 5006, "compute_id": "local"});
@@ -294,7 +294,7 @@ fn create_node_from_template() {
         .start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
     let node = gns3fy_rs::Node::default().with_name("alpine-2").with_template("alpine");
-    let created = lab.create_node(node).unwrap();
+    let created = lab.create_node(node).await.unwrap();
     assert_eq!(created.node_id.as_deref(), Some("new-node"));
     assert_eq!(created.status, Some(NodeStatus::Stopped));
     assert_eq!(created.project_id.as_deref(), Some(PROJECT_ID));
@@ -310,8 +310,8 @@ fn create_node_from_template() {
     );
 }
 
-#[test]
-fn snapshots() {
+#[tokio::test]
+pub async fn snapshots() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let first = json("project_snapshots.json")[0].clone();
     let snap_id = first["snapshot_id"].as_str().unwrap().to_string();
@@ -324,27 +324,27 @@ fn snapshots() {
     let mut lab = project(&server).with_project_id(PROJECT_ID);
     let name = first["name"].as_str().unwrap().to_string();
 
-    assert_eq!(lab.get_snapshot(Lookup::Name(&name)).unwrap().unwrap().snapshot_id, snap_id);
-    assert_eq!(lab.get_snapshot(Lookup::Id(&snap_id)).unwrap().unwrap().name, name);
-    assert!(lab.get_snapshot(Lookup::Name("ghost")).unwrap().is_none());
+    assert_eq!(lab.get_snapshot(Lookup::Name(&name)).await.unwrap().unwrap().snapshot_id, snap_id);
+    assert_eq!(lab.get_snapshot(Lookup::Id(&snap_id)).await.unwrap().unwrap().name, name);
+    assert!(lab.get_snapshot(Lookup::Name("ghost")).await.unwrap().is_none());
 
-    assert!(matches!(lab.create_snapshot(&name), Err(Error::InvalidInput(m)) if m == "Snapshot already created"));
-    let created = lab.create_snapshot("after").unwrap();
+    assert!(matches!(lab.create_snapshot(&name).await, Err(Error::InvalidInput(m)) if m == "Snapshot already created"));
+    let created = lab.create_snapshot("after").await.unwrap();
     assert_eq!(created.snapshot_id, "snap-new");
     assert_eq!(server.last_json("POST", &format!("{p}/snapshots")), json!({"name": "after"}));
 
-    lab.delete_snapshot(Lookup::Name(&name)).unwrap();
+    lab.delete_snapshot(Lookup::Name(&name)).await.unwrap();
     assert_eq!(server.count("DELETE", &format!("{p}/snapshots/{snap_id}")), 1);
-    assert!(matches!(lab.delete_snapshot(Lookup::Name("ghost")), Err(Error::NotFound(_))));
+    assert!(matches!(lab.delete_snapshot(Lookup::Name("ghost")).await, Err(Error::NotFound(_))));
 
     let gets_before = server.count("GET", &p);
-    lab.restore_snapshot(Lookup::Id(&snap_id)).unwrap();
+    lab.restore_snapshot(Lookup::Id(&snap_id)).await.unwrap();
     assert_eq!(server.count("POST", &format!("{p}/snapshots/{snap_id}/restore")), 1);
     assert_eq!(server.count("GET", &p), gets_before + 1, "restore refreshes the project");
 }
 
-#[test]
-fn drawings() {
+#[tokio::test]
+pub async fn drawings() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let existing = json("project_drawings.json")[0].clone();
     let id = existing["drawing_id"].as_str().unwrap().to_string();
@@ -356,10 +356,10 @@ fn drawings() {
         .start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
 
-    assert_eq!(lab.get_drawing(&id).unwrap().unwrap().drawing_id, id);
-    assert!(lab.get_drawing("nope").unwrap().is_none());
+    assert_eq!(lab.get_drawing(&id).await.unwrap().unwrap().drawing_id, id);
+    assert!(lab.get_drawing("nope").await.unwrap().is_none());
 
-    let d = lab.create_drawing("<svg/>", false, 1, 2, 3).unwrap();
+    let d = lab.create_drawing("<svg/>", false, 1, 2, 3).await.unwrap();
     assert_eq!(d.drawing_id, "d-new");
     assert_eq!(
         server.last_json("POST", &format!("{p}/drawings")),
@@ -368,21 +368,21 @@ fn drawings() {
     assert_eq!(lab.drawings.as_ref().unwrap().len(), 3);
 
     // only z changes; everything else is kept from the stored drawing
-    lab.update_drawing(&id, None, None, None, None, Some(9)).unwrap();
+    lab.update_drawing(&id, None, None, None, None, Some(9)).await.unwrap();
     let body = server.last_json("PUT", &format!("{p}/drawings/{id}"));
     assert_eq!(body["z"], 9);
     assert_eq!(body["svg"], existing["svg"]);
     assert_eq!(body["x"], existing["x"]);
     assert_eq!(body["locked"], existing["locked"]);
-    assert!(matches!(lab.update_drawing("nope", None, None, None, None, None), Err(Error::NotFound(_))));
+    assert!(matches!(lab.update_drawing("nope", None, None, None, None, None).await, Err(Error::NotFound(_))));
 
-    lab.delete_drawing(&id).unwrap();
+    lab.delete_drawing(&id).await.unwrap();
     assert_eq!(server.count("DELETE", &format!("{p}/drawings/{id}")), 1);
-    assert!(matches!(lab.delete_drawing("nope"), Err(Error::NotFound(_))));
+    assert!(matches!(lab.delete_drawing("nope").await, Err(Error::NotFound(_))));
 }
 
-#[test]
-fn arrange_nodes_on_a_circle() {
+#[tokio::test]
+pub async fn arrange_nodes_on_a_circle() {
     let p = format!("/v2/projects/{PROJECT_ID}");
     let mut routes = lab_routes();
     for n in json("nodes.json").as_array().unwrap() {
@@ -395,7 +395,7 @@ fn arrange_nodes_on_a_circle() {
     }
     let server = routes.start();
     let mut lab = project(&server).with_project_id(PROJECT_ID);
-    lab.arrange_nodes_circular(120.0).unwrap();
+    lab.arrange_nodes_circular(120.0).await.unwrap();
 
     let ids: Vec<String> = json("nodes.json")
         .as_array()

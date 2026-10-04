@@ -256,7 +256,7 @@ impl Node {
     }
 
     /// Connector, project id and node id; resolves `node_id` from `name` when missing.
-    fn require(&mut self) -> Result<(Arc<Gns3Connector>, String, String)> {
+    async fn require(&mut self) -> Result<(Arc<Gns3Connector>, String, String)> {
         let conn = self.connector.clone().ok_or(Error::MissingConnector)?;
         let pid = self
             .project_id
@@ -268,7 +268,8 @@ impl Node {
                 .clone()
                 .ok_or_else(|| Error::invalid("Need to either submit node_id or name"))?;
             let ids: Vec<String> = conn
-                .get_nodes(&pid)?
+                .get_nodes(&pid)
+                .await?
                 .into_iter()
                 .filter(|n| n.name.as_deref() == Some(name.as_str()))
                 .filter_map(|n| n.node_id)
@@ -288,29 +289,29 @@ impl Node {
     }
 
     /// Retrieves the node (and its links) from the server.
-    pub fn get(&mut self) -> Result<()> {
-        self.get_with_links(true)
+    pub async fn get(&mut self) -> Result<()> {
+        self.get_with_links(true).await
     }
 
     /// Like [`get`](Node::get), optionally skipping the links request.
-    pub fn get_with_links(&mut self, get_links: bool) -> Result<()> {
-        let (conn, pid, nid) = self.require()?;
-        let data: Node = conn.call_json(Method::GET, &format!("/projects/{pid}/nodes/{nid}"), Body::Empty)?;
+    pub async fn get_with_links(&mut self, get_links: bool) -> Result<()> {
+        let (conn, pid, nid) = self.require().await?;
+        let data: Node = conn.call_json(Method::GET, &format!("/projects/{pid}/nodes/{nid}"), Body::Empty).await?;
         self.apply(data);
         if get_links {
-            self.get_links()?;
+            self.get_links().await?;
         }
         Ok(())
     }
 
     /// Retrieves the links attached to this node.
-    pub fn get_links(&mut self) -> Result<()> {
-        let (conn, pid, nid) = self.require()?;
+    pub async fn get_links(&mut self) -> Result<()> {
+        let (conn, pid, nid) = self.require().await?;
         let mut links: Vec<Link> = conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/nodes/{nid}/links"),
             Body::Empty,
-        )?;
+        ).await?;
         for link in &mut links {
             link.connector = Some(conn.clone());
         }
@@ -320,52 +321,52 @@ impl Node {
 
     /// POST an action (`start`, `stop`, `reload`, `suspend`); update from the answer when
     /// it already reports the expected status, otherwise re-fetch the node.
-    fn action(&mut self, action: &str, expected: NodeStatus) -> Result<()> {
-        let (conn, pid, nid) = self.require()?;
+    async fn action(&mut self, action: &str, expected: NodeStatus) -> Result<()> {
+        let (conn, pid, nid) = self.require().await?;
         let data: Node = conn.call_json(
             Method::POST,
             &format!("/projects/{pid}/nodes/{nid}/{action}"),
             Body::Empty,
-        )?;
+        ).await?;
         if data.status == Some(expected) {
             self.apply(data);
             Ok(())
         } else {
-            self.get()
+            self.get().await
         }
     }
 
-    pub fn start(&mut self) -> Result<()> {
-        self.action("start", NodeStatus::Started)
+    pub async fn start(&mut self) -> Result<()> {
+        self.action("start", NodeStatus::Started).await
     }
 
-    pub fn stop(&mut self) -> Result<()> {
-        self.action("stop", NodeStatus::Stopped)
+    pub async fn stop(&mut self) -> Result<()> {
+        self.action("stop", NodeStatus::Stopped).await
     }
 
-    pub fn reload(&mut self) -> Result<()> {
-        self.action("reload", NodeStatus::Started)
+    pub async fn reload(&mut self) -> Result<()> {
+        self.action("reload", NodeStatus::Started).await
     }
 
-    pub fn suspend(&mut self) -> Result<()> {
-        self.action("suspend", NodeStatus::Suspended)
+    pub async fn suspend(&mut self) -> Result<()> {
+        self.action("suspend", NodeStatus::Suspended).await
     }
 
     /// Updates the node on the server with the `Some` fields of `patch`.
-    pub fn update(&mut self, patch: &NodeUpdate) -> Result<()> {
-        let (conn, pid, nid) = self.require()?;
+    pub async fn update(&mut self, patch: &NodeUpdate) -> Result<()> {
+        let (conn, pid, nid) = self.require().await?;
         let data: Node = conn.call_json(
             Method::PUT,
             &format!("/projects/{pid}/nodes/{nid}"),
             Body::json(patch)?,
-        )?;
+        ).await?;
         self.apply(data);
         Ok(())
     }
 
     /// Creates the node from a template (`template` name or `template_id`), then applies
     /// the remaining attributes set on this object.
-    pub fn create(&mut self) -> Result<()> {
+    pub async fn create(&mut self) -> Result<()> {
         if self.node_id.is_some() {
             return Err(Error::invalid("Node already created"));
         }
@@ -380,7 +381,7 @@ impl Node {
                 .clone()
                 .ok_or_else(|| Error::invalid("Need either 'template' of 'template_id'"))?;
             let template = conn
-                .get_template(Lookup::Name(&name))?
+                .get_template(Lookup::Name(&name)).await?
                 .ok_or_else(|| Error::invalid(format!("Template {name} not found")))?;
             self.template_id = template.template_id;
         }
@@ -394,15 +395,15 @@ impl Node {
                 y: 0,
                 compute_id: &self.compute_id,
             })?,
-        )?;
+        ).await?;
         self.apply(created);
-        self.update(&cached)
+        self.update(&cached).await
     }
 
     /// Deletes the node on the server and clears `project_id`, `node_id` and `name`.
-    pub fn delete(&mut self) -> Result<()> {
-        let (conn, pid, nid) = self.require()?;
-        conn.call(Method::DELETE, &format!("/projects/{pid}/nodes/{nid}"), Body::Empty)?;
+    pub async fn delete(&mut self) -> Result<()> {
+        let (conn, pid, nid) = self.require().await?;
+        conn.call(Method::DELETE, &format!("/projects/{pid}/nodes/{nid}"), Body::Empty).await?;
         self.project_id = None;
         self.node_id = None;
         self.name = None;
@@ -410,21 +411,23 @@ impl Node {
     }
 
     /// Reads a file from the node directory.
-    pub fn get_file(&mut self, path: &str) -> Result<String> {
-        let (conn, pid, nid) = self.require()?;
+    pub async fn get_file(&mut self, path: &str) -> Result<String> {
+        let (conn, pid, nid) = self.require().await?;
         Ok(conn
-            .call(Method::GET, &format!("/projects/{pid}/nodes/{nid}/files/{path}"), Body::Empty)?
-            .text()?)
+            .call(Method::GET, &format!("/projects/{pid}/nodes/{nid}/files/{path}"), Body::Empty)
+            .await?
+            .text()
+            .await?)
     }
 
     /// Writes a file in the node directory.
-    pub fn write_file(&mut self, path: &str, data: impl Into<Vec<u8>>) -> Result<()> {
-        let (conn, pid, nid) = self.require()?;
+    pub async fn write_file(&mut self, path: &str, data: impl Into<Vec<u8>>) -> Result<()> {
+        let (conn, pid, nid) = self.require().await?;
         conn.call(
             Method::POST,
             &format!("/projects/{pid}/nodes/{nid}/files/{path}"),
             Body::Bytes(data.into()),
-        )?;
+        ).await?;
         Ok(())
     }
 }

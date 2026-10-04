@@ -19,8 +19,8 @@ fn project_path(id: &str) -> String {
 }
 
 /// The exact scenario of the bug report.
-#[test]
-fn delete_every_project_returned_by_get_projects() {
+#[tokio::test]
+pub async fn delete_every_project_returned_by_get_projects() {
     let server = Routes::new()
         .on("GET", "/v2/projects", 200, data("projects.json"))
         .on("DELETE", &project_path(PROJECT_ID), 204, "")
@@ -28,16 +28,16 @@ fn delete_every_project_returned_by_get_projects() {
         .start();
     let connector = connector(&server);
 
-    for mut project in connector.get_projects().unwrap() {
-        project.delete().unwrap();
+    for mut project in connector.get_projects().await.unwrap() {
+        project.delete().await.unwrap();
     }
 
     assert_eq!(server.count("DELETE", &project_path(PROJECT_ID)), 1);
     assert_eq!(server.count("DELETE", &project_path(OTHER_PROJECT_ID)), 1);
 }
 
-#[test]
-fn projects_from_the_connector_are_bound() {
+#[tokio::test]
+pub async fn projects_from_the_connector_are_bound() {
     let api_test = load::<Vec<Project>>("projects.json").remove(1);
     let server = Routes::new()
         .on("GET", "/v2/projects", 200, data("projects.json"))
@@ -51,24 +51,24 @@ fn projects_from_the_connector_are_bound() {
         .start();
     let c = connector(&server);
 
-    assert!(c.get_projects().unwrap().iter().all(|p| p.connector.is_some()));
+    assert!(c.get_projects().await.unwrap().iter().all(|p| p.connector.is_some()));
 
-    let mut by_name = c.get_project(Lookup::Name("API_TEST")).unwrap().unwrap();
+    let mut by_name = c.get_project(Lookup::Name("API_TEST")).await.unwrap().unwrap();
     assert!(by_name.connector.is_some());
-    by_name.get().unwrap();
-    by_name.open().unwrap();
+    by_name.get().await.unwrap();
+    by_name.open().await.unwrap();
 
-    let mut by_id = c.get_project(Lookup::Id(PROJECT_ID)).unwrap().unwrap();
+    let mut by_id = c.get_project(Lookup::Id(PROJECT_ID)).await.unwrap().unwrap();
     assert!(by_id.connector.is_some());
 
-    let mut created = c.create_project(&Project::default().with_name("API_TEST")).unwrap();
+    let mut created = c.create_project(&Project::default().with_name("API_TEST")).await.unwrap();
     assert!(created.connector.is_some());
-    created.delete().unwrap();
-    by_id.delete().unwrap();
+    created.delete().await.unwrap();
+    by_id.delete().await.unwrap();
 }
 
-#[test]
-fn templates_from_the_connector_are_bound() {
+#[tokio::test]
+pub async fn templates_from_the_connector_are_bound() {
     let alpine = load::<Vec<Template>>("templates.json")
         .into_iter()
         .find(|t| t.name == "alpine")
@@ -87,34 +87,34 @@ fn templates_from_the_connector_are_bound() {
         .start();
     let c = connector(&server);
 
-    assert!(c.get_templates().unwrap().iter().all(|t| t.connector.is_some()));
+    assert!(c.get_templates().await.unwrap().iter().all(|t| t.connector.is_some()));
 
     // a user-facing flow: fetch, edit, save
-    let mut t = c.get_template(Lookup::Name("alpine")).unwrap().unwrap();
+    let mut t = c.get_template(Lookup::Name("alpine")).await.unwrap().unwrap();
     assert!(t.connector.is_some());
     if let TemplateKind::Docker(d) = &mut t.kind {
         d.start_command = Some("sh".into());
     }
-    t.save().unwrap();
+    t.save().await.unwrap();
 
-    let by_id = c.get_template(Lookup::Id(&id)).unwrap().unwrap();
+    let by_id = c.get_template(Lookup::Id(&id)).await.unwrap().unwrap();
     assert!(by_id.connector.is_some());
 
     let mut fresh = Template::new(c.clone(), "fresh", alpine.kind.clone());
     fresh.template_id = None;
-    let mut stored = c.create_template(&fresh).unwrap();
+    let mut stored = c.create_template(&fresh).await.unwrap();
     assert!(stored.connector.is_some());
-    stored.delete().unwrap();
+    stored.delete().await.unwrap();
 
-    let mut updated = c.update_template(&t).unwrap();
+    let mut updated = c.update_template(&t).await.unwrap();
     assert!(updated.connector.is_some());
-    updated.delete().unwrap();
+    updated.delete().await.unwrap();
     assert_eq!(server.count("DELETE", "/v2/templates/fresh-id"), 1);
     assert_eq!(server.count("DELETE", &format!("/v2/templates/{id}")), 1);
 }
 
-#[test]
-fn nodes_and_links_from_the_connector_are_bound() {
+#[tokio::test]
+pub async fn nodes_and_links_from_the_connector_are_bound() {
     let p = project_path(PROJECT_ID);
     let alpine = load::<Vec<Node>>("nodes.json").remove(4);
     let started = {
@@ -137,27 +137,27 @@ fn nodes_and_links_from_the_connector_are_bound() {
         .start();
     let c = connector(&server);
 
-    let nodes = c.get_nodes(PROJECT_ID).unwrap();
+    let nodes = c.get_nodes(PROJECT_ID).await.unwrap();
     assert_eq!(nodes.len(), 6);
     assert!(nodes.iter().all(|n| n.connector.is_some()));
-    let mut node = c.get_node(PROJECT_ID, ALPINE_ID).unwrap();
+    let mut node = c.get_node(PROJECT_ID, ALPINE_ID).await.unwrap();
     assert!(node.connector.is_some());
-    node.start().unwrap();
-    node.delete().unwrap();
+    node.start().await.unwrap();
+    node.delete().await.unwrap();
 
-    let links = c.get_links(PROJECT_ID).unwrap();
+    let links = c.get_links(PROJECT_ID).await.unwrap();
     assert_eq!(links.len(), 7);
     assert!(links.iter().all(|l| l.connector.is_some()));
-    let mut l = c.get_link(PROJECT_ID, LINK_ID).unwrap();
+    let mut l = c.get_link(PROJECT_ID, LINK_ID).await.unwrap();
     assert!(l.connector.is_some());
-    l.get().unwrap();
-    l.delete().unwrap();
+    l.get().await.unwrap();
+    l.delete().await.unwrap();
 }
 
 /// `once_cell::Lazy<Arc<Gns3Connector>>` statics deref to the `Arc`; the methods must be
 /// reachable through such a wrapper.
-#[test]
-fn works_through_a_lazy_static_style_wrapper() {
+#[tokio::test]
+pub async fn works_through_a_lazy_static_style_wrapper() {
     struct LazyConnector(Arc<Gns3Connector>);
     impl std::ops::Deref for LazyConnector {
         type Target = Arc<Gns3Connector>;
@@ -173,8 +173,8 @@ fn works_through_a_lazy_static_style_wrapper() {
         .start();
     let connector = LazyConnector(connector(&server));
 
-    for mut project in connector.get_projects().unwrap() {
-        project.delete().unwrap();
+    for mut project in connector.get_projects().await.unwrap() {
+        project.delete().await.unwrap();
     }
     assert_eq!(server.count("DELETE", &project_path(PROJECT_ID)), 1);
     assert_eq!(server.count("DELETE", &project_path(OTHER_PROJECT_ID)), 1);

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-
+use tokio::time::sleep;
 use crate::connector::{Body, Gns3Connector};
 use crate::error::{Error, Result};
 use crate::link::Link;
@@ -239,19 +239,19 @@ impl Project {
 
     /// Retrieves the project (by `project_id`, or by `name` when no id is known) together
     /// with stats, snapshots, drawings, nodes and links.
-    pub fn get(&mut self) -> Result<bool> {
-        self.get_with(true, true, true)
+    pub async fn get(&mut self) -> Result<bool> {
+        self.get_with(true, true, true).await
     }
 
     /// Like [`get`](Project::get), choosing which related objects to fetch.
-    pub fn get_with(&mut self, get_links: bool, get_nodes: bool, get_stats: bool) -> Result<bool> {
+    pub async fn get_with(&mut self, get_links: bool, get_nodes: bool, get_stats: bool) -> Result<bool> {
         let conn = self.connector.clone().ok_or(Error::MissingConnector)?;
         if self.project_id.is_none() {
             let name = self
                 .name
                 .clone()
                 .ok_or_else(|| Error::invalid("Need to submit either project_id or name"))?;
-            for p in conn.get_projects()? {
+            for p in conn.get_projects().await? {
                 if p.name.as_deref() == Some(name.as_str()) {
                     self.project_id = p.project_id;
                 }
@@ -261,29 +261,29 @@ impl Project {
             }
         }
         let (conn, pid) = self.require()?;
-        let data: Project = conn.call_json(Method::GET, &format!("/projects/{pid}"), Body::Empty)?;
+        let data: Project = conn.call_json(Method::GET, &format!("/projects/{pid}"), Body::Empty).await?;
         self.apply(data);
         if get_stats {
-            self.get_stats()?;
+            self.get_stats().await?;
             let stats = self.stats.clone().unwrap_or_default();
             if stats.snapshots > 0 {
-                self.get_snapshots()?;
+                self.get_snapshots().await?;
             }
             if stats.drawings > 0 {
-                self.get_drawings()?;
+                self.get_drawings().await?;
             }
         }
         if get_nodes {
-            self.get_nodes()?;
+            self.get_nodes().await?;
         }
         if get_links {
-            self.get_links()?;
+            self.get_links().await?;
         }
         Ok(true)
     }
 
     /// Creates the project on the server (`name` is required).
-    pub fn create(&mut self) -> Result<()> {
+    pub async fn create(&mut self) -> Result<()> {
         if self.name.is_none() {
             return Err(Error::invalid("Need to submit project name"));
         }
@@ -293,33 +293,33 @@ impl Project {
             stats: None,
             ..self.clone()
         };
-        let data: Project = conn.call_json(Method::POST, "/projects", Body::json(&request)?)?;
+        let data: Project = conn.call_json(Method::POST, "/projects", Body::json(&request)?).await?;
         self.apply(data);
         Ok(())
     }
 
     /// Updates the project on the server with the `Some` fields of `patch`.
-    pub fn update(&mut self, patch: &ProjectUpdate) -> Result<()> {
+    pub async fn update(&mut self, patch: &ProjectUpdate) -> Result<()> {
         let (conn, pid) = self.require()?;
         let data: Project =
-            conn.call_json(Method::PUT, &format!("/projects/{pid}"), Body::json(patch)?)?;
+            conn.call_json(Method::PUT, &format!("/projects/{pid}"), Body::json(patch)?).await?;
         self.apply(data);
         Ok(())
     }
 
     /// Deletes the project and clears `project_id` / `name`.
-    pub fn delete(&mut self) -> Result<()> {
+    pub async fn delete(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        conn.call(Method::DELETE, &format!("/projects/{pid}"), Body::Empty)?;
+        conn.call(Method::DELETE, &format!("/projects/{pid}"), Body::Empty).await?;
         self.project_id = None;
         self.name = None;
         Ok(())
     }
 
     /// Closes the project.
-    pub fn close(&mut self) -> Result<()> {
+    pub async fn close(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let resp = conn.call(Method::POST, &format!("/projects/{pid}/close"), Body::Empty)?;
+        let resp = conn.call(Method::POST, &format!("/projects/{pid}/close"), Body::Empty).await?;
         if resp.status().as_u16() == 204 {
             self.status = Some(ProjectStatus::Closed);
         }
@@ -327,54 +327,56 @@ impl Project {
     }
 
     /// Opens the project.
-    pub fn open(&mut self) -> Result<()> {
+    pub async fn open(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
         let data: Project =
-            conn.call_json(Method::POST, &format!("/projects/{pid}/open"), Body::Empty)?;
+            conn.call_json(Method::POST, &format!("/projects/{pid}/open"), Body::Empty).await?;
         self.apply(data);
         Ok(())
     }
 
     /// Refreshes `stats`.
-    pub fn get_stats(&mut self) -> Result<()> {
+    pub async fn get_stats(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
         self.stats = Some(conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/stats"),
             Body::Empty,
-        )?);
+        ).await?);
         Ok(())
     }
 
     /// Reads a file from the project directory.
-    pub fn get_file(&self, path: &str) -> Result<String> {
+    pub async fn get_file(&self, path: &str) -> Result<String> {
         let (conn, pid) = self.require()?;
         Ok(conn
-            .call(Method::GET, &format!("/projects/{pid}/files/{path}"), Body::Empty)?
-            .text()?)
+            .call(Method::GET, &format!("/projects/{pid}/files/{path}"), Body::Empty)
+            .await?
+            .text()
+            .await?)
     }
 
     /// Writes a file in the project directory.
-    pub fn write_file(&self, path: &str, data: impl Into<Vec<u8>>) -> Result<()> {
+    pub async fn write_file(&self, path: &str, data: impl Into<Vec<u8>>) -> Result<()> {
         let (conn, pid) = self.require()?;
         conn.call(
             Method::POST,
             &format!("/projects/{pid}/files/{path}"),
             Body::Bytes(data.into()),
-        )?;
+        ).await?;
         Ok(())
     }
 
     // ---- nodes -------------------------------------------------------------------------
 
     /// Refreshes `nodes` from the server.
-    pub fn get_nodes(&mut self) -> Result<()> {
+    pub async fn get_nodes(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
         let mut nodes: Vec<Node> = conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/nodes"),
             Body::Empty,
-        )?;
+        ).await?;
         for node in &mut nodes {
             node.connector = Some(conn.clone());
             node.project_id = Some(pid.clone());
@@ -384,13 +386,13 @@ impl Project {
     }
 
     /// Refreshes `links` from the server.
-    pub fn get_links(&mut self) -> Result<()> {
+    pub async fn get_links(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
         let mut links: Vec<Link> = conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/links"),
             Body::Empty,
-        )?;
+        ).await?;
         for link in &mut links {
             link.connector = Some(conn.clone());
             link.project_id = Some(pid.clone());
@@ -399,47 +401,47 @@ impl Project {
         Ok(())
     }
 
-    fn nodes_action(&mut self, action: &str, poll_wait: Duration) -> Result<()> {
+    async fn nodes_action(&mut self, action: &str, poll_wait: Duration) -> Result<()> {
         let (conn, pid) = self.require()?;
-        conn.call(Method::POST, &format!("/projects/{pid}/nodes/{action}"), Body::Empty)?;
-        std::thread::sleep(poll_wait);
-        self.get_nodes()
+        conn.call(Method::POST, &format!("/projects/{pid}/nodes/{action}"), Body::Empty).await?;
+        sleep(poll_wait).await;
+        self.get_nodes().await
     }
 
     /// Starts all nodes, waits `poll_wait`, then refreshes the nodes.
-    pub fn start_nodes(&mut self, poll_wait: Duration) -> Result<()> {
-        self.nodes_action("start", poll_wait)
+    pub async fn start_nodes(&mut self, poll_wait: Duration) -> Result<()> {
+        self.nodes_action("start", poll_wait).await
     }
 
-    pub fn stop_nodes(&mut self, poll_wait: Duration) -> Result<()> {
-        self.nodes_action("stop", poll_wait)
+    pub async fn stop_nodes(&mut self, poll_wait: Duration) -> Result<()> {
+        self.nodes_action("stop", poll_wait).await
     }
 
-    pub fn reload_nodes(&mut self, poll_wait: Duration) -> Result<()> {
-        self.nodes_action("reload", poll_wait)
+    pub async fn reload_nodes(&mut self, poll_wait: Duration) -> Result<()> {
+        self.nodes_action("reload", poll_wait).await
     }
 
-    pub fn suspend_nodes(&mut self, poll_wait: Duration) -> Result<()> {
-        self.nodes_action("suspend", poll_wait)
+    pub async fn suspend_nodes(&mut self, poll_wait: Duration) -> Result<()> {
+        self.nodes_action("suspend", poll_wait).await
     }
 
-    fn ensure_nodes(&mut self) -> Result<()> {
+    async fn ensure_nodes(&mut self) -> Result<()> {
         if self.nodes.is_empty() {
-            self.get_nodes()?;
+            self.get_nodes().await?;
         }
         Ok(())
     }
 
-    fn ensure_links(&mut self) -> Result<()> {
+    async fn ensure_links(&mut self) -> Result<()> {
         if self.links.is_empty() {
-            self.get_links()?;
+            self.get_links().await?;
         }
         Ok(())
     }
 
     /// `(name, status, console, node_id)` for every node.
-    pub fn nodes_summary(&mut self) -> Result<Vec<NodeSummary>> {
-        self.ensure_nodes()?;
+    pub async fn nodes_summary(&mut self) -> Result<Vec<NodeSummary>> {
+        self.ensure_nodes().await?;
         Ok(self
             .nodes
             .iter()
@@ -453,8 +455,8 @@ impl Project {
     }
 
     /// Inventory of the nodes keyed by node name (useful for Ansible-like tooling).
-    pub fn nodes_inventory(&mut self) -> Result<BTreeMap<String, NodeInventory>> {
-        self.ensure_nodes()?;
+    pub async fn nodes_inventory(&mut self) -> Result<BTreeMap<String, NodeInventory>> {
+        self.ensure_nodes().await?;
         let conn = self.connector.clone().ok_or(Error::MissingConnector)?;
         let server = url::Url::parse(conn.base_url())?.host_str().map(String::from);
         Ok(self
@@ -502,9 +504,9 @@ impl Project {
     }
 
     /// `(node_a, port_a, node_b, port_b)` for every link of the project.
-    pub fn links_summary(&mut self) -> Result<Vec<LinkSummary>> {
-        self.ensure_nodes()?;
-        self.ensure_links()?;
+    pub async fn links_summary(&mut self) -> Result<Vec<LinkSummary>> {
+        self.ensure_nodes().await?;
+        self.ensure_links().await?;
         let mut out = Vec::new();
         for link in &self.links {
             let Some([a, b, ..]) = link.nodes.as_deref() else {
@@ -523,8 +525,8 @@ impl Project {
     }
 
     /// Finds a node by name or ID (loading the nodes when not yet loaded).
-    pub fn get_node(&mut self, lookup: Lookup<'_>) -> Result<Option<&Node>> {
-        self.ensure_nodes()?;
+    pub async fn get_node(&mut self, lookup: Lookup<'_>) -> Result<Option<&Node>> {
+        self.ensure_nodes().await?;
         Ok(self.nodes.iter().find(|n| match lookup {
             Lookup::Id(id) => n.node_id.as_deref() == Some(id),
             Lookup::Name(name) => n.name.as_deref() == Some(name),
@@ -532,8 +534,8 @@ impl Project {
     }
 
     /// Mutable variant of [`get_node`](Project::get_node), to act on the node directly.
-    pub fn get_node_mut(&mut self, lookup: Lookup<'_>) -> Result<Option<&mut Node>> {
-        self.ensure_nodes()?;
+    pub async fn get_node_mut(&mut self, lookup: Lookup<'_>) -> Result<Option<&mut Node>> {
+        self.ensure_nodes().await?;
         Ok(self.nodes.iter_mut().find(|n| match lookup {
             Lookup::Id(id) => n.node_id.as_deref() == Some(id),
             Lookup::Name(name) => n.name.as_deref() == Some(name),
@@ -541,27 +543,28 @@ impl Project {
     }
 
     /// Finds a link by ID (loading the links when not yet loaded).
-    pub fn get_link(&mut self, link_id: &str) -> Result<Option<&Link>> {
-        self.ensure_links()?;
+    pub async fn get_link(&mut self, link_id: &str) -> Result<Option<&Link>> {
+        self.ensure_links().await?;
         Ok(self.links.iter().find(|l| l.link_id.as_deref() == Some(link_id)))
     }
 
     /// Creates a node from a template: pass a [`Node`] with `name` and `template` (or
     /// `template_id`) set; `project_id` and `connector` are filled in for you.
-    pub fn create_node(&mut self, mut node: Node) -> Result<&Node> {
-        self.ensure_nodes()?;
+    pub async fn create_node(&mut self, mut node: Node) -> Result<&Node> {
+        self.ensure_nodes().await?;
         let (conn, pid) = self.require()?;
         node.project_id = Some(pid);
         node.connector = Some(conn);
-        node.create()?;
+        node.create().await?;
         self.nodes.push(node);
         Ok(self.nodes.last().expect("just pushed"))
     }
 
     /// Resolves `(node, port)` names into a [`Node`] clone and [`Port`] clone.
-    fn resolve_port(&mut self, node: &str, port: &str, label: &str) -> Result<(Node, Port)> {
+    async fn resolve_port(&mut self, node: &str, port: &str, label: &str) -> Result<(Node, Port)> {
         let n = self
-            .get_node(Lookup::Name(node))?
+            .get_node(Lookup::Name(node))
+            .await?
             .ok_or_else(|| Error::invalid(format!("{label}: {node} not found")))?
             .clone();
         let p = n
@@ -573,17 +576,17 @@ impl Project {
 
     /// Creates a link between `node_a:port_a` and `node_b:port_b` (names as in the GUI).
     /// Fails when one of the ports is already used by another link.
-    pub fn create_link(
+    pub async fn create_link(
         &mut self,
         node_a: &str,
         port_a: &str,
         node_b: &str,
         port_b: &str,
     ) -> Result<&Link> {
-        self.ensure_nodes()?;
-        self.ensure_links()?;
-        let (na, pa) = self.resolve_port(node_a, port_a, "node_a")?;
-        let (nb, pb) = self.resolve_port(node_b, port_b, "node_b")?;
+        self.ensure_nodes().await?;
+        self.ensure_links().await?;
+        let (na, pa) = self.resolve_port(node_a, port_a, "node_a").await?;
+        let (nb, pb) = self.resolve_port(node_b, port_b, "node_b").await?;
         let ea = endpoint(&na, &pa);
         let eb = endpoint(&nb, &pb);
 
@@ -607,23 +610,23 @@ impl Project {
             nodes: Some(vec![ea, eb]),
             ..Default::default()
         };
-        link.create()?;
+        link.create().await?;
         self.links.push(link);
         Ok(self.links.last().expect("just pushed"))
     }
 
     /// Deletes the link between `node_a:port_a` and `node_b:port_b` (either orientation).
-    pub fn delete_link(
+    pub async fn delete_link(
         &mut self,
         node_a: &str,
         port_a: &str,
         node_b: &str,
         port_b: &str,
     ) -> Result<()> {
-        self.ensure_nodes()?;
-        self.ensure_links()?;
-        let (na, pa) = self.resolve_port(node_a, port_a, "node_a")?;
-        let (nb, pb) = self.resolve_port(node_b, port_b, "node_b")?;
+        self.ensure_nodes().await?;
+        self.ensure_links().await?;
+        let (na, pa) = self.resolve_port(node_a, port_a, "node_a").await?;
+        let (nb, pb) = self.resolve_port(node_b, port_b, "node_b").await?;
         let ea = endpoint(&na, &pa);
         let eb = endpoint(&nb, &pb);
 
@@ -640,26 +643,26 @@ impl Project {
                 Error::invalid(format!("Link not found: {node_a}:{port_a} <-> {node_b}:{port_b}"))
             })?;
         let mut link = self.links.remove(index);
-        link.delete()
+        link.delete().await
     }
 
     // ---- snapshots ---------------------------------------------------------------------
 
     /// Refreshes `snapshots` from the server.
-    pub fn get_snapshots(&mut self) -> Result<()> {
+    pub async fn get_snapshots(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
         self.snapshots = Some(conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/snapshots"),
             Body::Empty,
-        )?);
+        ).await?);
         Ok(())
     }
 
     /// Finds a snapshot by name or ID (loading snapshots when not yet loaded).
-    pub fn get_snapshot(&mut self, lookup: Lookup<'_>) -> Result<Option<Snapshot>> {
+    pub async fn get_snapshot(&mut self, lookup: Lookup<'_>) -> Result<Option<Snapshot>> {
         if self.snapshots.as_ref().map_or(true, Vec::is_empty) {
-            self.get_snapshots()?;
+            self.get_snapshots().await?;
         }
         Ok(self.snapshots.iter().flatten().find(|s| match lookup {
             Lookup::Id(id) => s.snapshot_id == id,
@@ -668,59 +671,59 @@ impl Project {
     }
 
     /// Creates a snapshot; fails if one with the same name exists.
-    pub fn create_snapshot(&mut self, name: &str) -> Result<Snapshot> {
+    pub async fn create_snapshot(&mut self, name: &str) -> Result<Snapshot> {
         let (conn, pid) = self.require()?;
-        self.get_snapshots()?;
-        if self.get_snapshot(Lookup::Name(name))?.is_some() {
+        self.get_snapshots().await?;
+        if self.get_snapshot(Lookup::Name(name)).await?.is_some() {
             return Err(Error::invalid("Snapshot already created"));
         }
         let snapshot: Snapshot = conn.call_json(
             Method::POST,
             &format!("/projects/{pid}/snapshots"),
             Body::json(&SnapshotRequest { name })?,
-        )?;
+        ).await?;
         self.snapshots.get_or_insert_with(Vec::new).push(snapshot.clone());
         Ok(snapshot)
     }
 
-    fn existing_snapshot(&mut self, lookup: Lookup<'_>) -> Result<Snapshot> {
+    async fn existing_snapshot(&mut self, lookup: Lookup<'_>) -> Result<Snapshot> {
         self.require()?;
-        self.get_snapshots()?;
-        self.get_snapshot(lookup)?
+        self.get_snapshots().await?;
+        self.get_snapshot(lookup).await?
             .ok_or_else(|| Error::not_found("Snapshot not found"))
     }
 
     /// Deletes a snapshot by name or ID.
-    pub fn delete_snapshot(&mut self, lookup: Lookup<'_>) -> Result<()> {
+    pub async fn delete_snapshot(&mut self, lookup: Lookup<'_>) -> Result<()> {
         let (conn, pid) = self.require()?;
-        let snap = self.existing_snapshot(lookup)?;
+        let snap = self.existing_snapshot(lookup).await?;
         conn.call(
             Method::DELETE,
             &format!("/projects/{pid}/snapshots/{}", snap.snapshot_id),
             Body::Empty,
-        )?;
-        self.get_snapshots()
+        ).await?;
+        self.get_snapshots().await
     }
 
     /// Restores a snapshot by name or ID, then refreshes the project.
-    pub fn restore_snapshot(&mut self, lookup: Lookup<'_>) -> Result<bool> {
+    pub async fn restore_snapshot(&mut self, lookup: Lookup<'_>) -> Result<bool> {
         let (conn, pid) = self.require()?;
-        let snap = self.existing_snapshot(lookup)?;
+        let snap = self.existing_snapshot(lookup).await?;
         conn.call(
             Method::POST,
             &format!("/projects/{pid}/snapshots/{}/restore", snap.snapshot_id),
             Body::Empty,
-        )?;
-        self.get()
+        ).await?;
+        self.get().await
     }
 
     // ---- layout & drawings -------------------------------------------------------------
 
     /// Arranges the nodes on a circle of the given radius around the origin.
-    pub fn arrange_nodes_circular(&mut self, radius: f64) -> Result<()> {
-        self.get()?;
+    pub async fn arrange_nodes_circular(&mut self, radius: f64) -> Result<()> {
+        self.get().await?;
         if self.status != Some(ProjectStatus::Opened) {
-            self.open()?;
+            self.open().await?;
         }
         if self.nodes.is_empty() {
             return Ok(());
@@ -733,26 +736,26 @@ impl Project {
                 x: Some(x),
                 y: Some(y),
                 ..Default::default()
-            })?;
+            }).await?;
         }
         Ok(())
     }
 
     /// Refreshes `drawings` from the server.
-    pub fn get_drawings(&mut self) -> Result<()> {
+    pub async fn get_drawings(&mut self) -> Result<()> {
         let (conn, pid) = self.require()?;
         self.drawings = Some(conn.call_json(
             Method::GET,
             &format!("/projects/{pid}/drawings"),
             Body::Empty,
-        )?);
+        ).await?);
         Ok(())
     }
 
     /// Finds a drawing by ID (loading drawings when not yet loaded).
-    pub fn get_drawing(&mut self, drawing_id: &str) -> Result<Option<Drawing>> {
+    pub async fn get_drawing(&mut self, drawing_id: &str) -> Result<Option<Drawing>> {
         if self.drawings.as_ref().map_or(true, Vec::is_empty) {
-            self.get_drawings()?;
+            self.get_drawings().await?;
         }
         Ok(self
             .drawings
@@ -764,7 +767,7 @@ impl Project {
 
     /// Creates a drawing from an SVG string. Positions default to `x=10, y=10, z=1` in the
     /// Python library; pass them explicitly here.
-    pub fn create_drawing(&mut self, svg: &str, locked: bool, x: i64, y: i64, z: i64) -> Result<Drawing> {
+    pub async fn create_drawing(&mut self, svg: &str, locked: bool, x: i64, y: i64, z: i64) -> Result<Drawing> {
         let (conn, pid) = self.require()?;
         let drawing: Drawing = conn.call_json(
             Method::POST,
@@ -776,13 +779,13 @@ impl Project {
                 y: Some(y),
                 z: Some(z),
             })?,
-        )?;
+        ).await?;
         self.drawings.get_or_insert_with(Vec::new).push(drawing.clone());
         Ok(drawing)
     }
 
     /// Updates a drawing; `None` fields keep their current value.
-    pub fn update_drawing(
+    pub async fn update_drawing(
         &mut self,
         drawing_id: &str,
         svg: Option<&str>,
@@ -793,7 +796,8 @@ impl Project {
     ) -> Result<Drawing> {
         let (conn, pid) = self.require()?;
         let current = self
-            .get_drawing(drawing_id)?
+            .get_drawing(drawing_id)
+            .await?
             .ok_or_else(|| Error::not_found("drawing not found"))?;
         let request = DrawingRequest {
             svg: svg.unwrap_or(&current.svg),
@@ -806,24 +810,25 @@ impl Project {
             Method::PUT,
             &format!("/projects/{pid}/drawings/{drawing_id}"),
             Body::json(&request)?,
-        )?;
-        self.get_drawings()?;
+        ).await?;
+        self.get_drawings().await?;
         Ok(updated)
     }
 
     /// Deletes a drawing by ID.
-    pub fn delete_drawing(&mut self, drawing_id: &str) -> Result<()> {
+    pub async fn delete_drawing(&mut self, drawing_id: &str) -> Result<()> {
         let (conn, pid) = self.require()?;
-        self.get_drawings()?;
+        self.get_drawings().await?;
         let drawing = self
-            .get_drawing(drawing_id)?
+            .get_drawing(drawing_id)
+            .await?
             .ok_or_else(|| Error::not_found("drawing not found"))?;
         conn.call(
             Method::DELETE,
             &format!("/projects/{pid}/drawings/{}", drawing.drawing_id),
             Body::Empty,
-        )?;
-        self.get_drawings()
+        ).await?;
+        self.get_drawings().await
     }
 }
 

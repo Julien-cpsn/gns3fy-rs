@@ -20,18 +20,19 @@ use crate::types::{ConsoleType, Lookup, TemplateType};
 /// use std::sync::Arc;
 /// use gns3fy_rs::{Gns3Connector, Lookup, Template, TemplateKind};
 ///
-/// # fn main() -> gns3fy_rs::Result<()> {
+/// #[tokio::main]
+/// # async fn main() -> gns3fy_rs::Result<()> {
 /// let server = Arc::new(Gns3Connector::new("http://localhost:3080")?);
 ///
-/// for t in Template::list(&server)? {
+/// for t in Template::list(&server).await? {
 ///     println!("{} ({})", t.name, t.template_type());
 /// }
 ///
-/// let mut alpine = Template::find(&server, Lookup::Name("alpine"))?.expect("template exists");
+/// let mut alpine = Template::find(&server, Lookup::Name("alpine")).await?.expect("template exists");
 /// if let TemplateKind::Docker(docker) = &mut alpine.kind {
 ///     docker.start_command = Some("sh".into());
 /// }
-/// alpine.save()?;
+/// alpine.save().await?;
 /// # Ok(()) }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,13 +139,13 @@ impl Template {
     // ---- listing / lookup ---------------------------------------------------------------
 
     /// All the templates defined on the server, bound to `connector`.
-    pub fn list(connector: &Arc<Gns3Connector>) -> Result<Vec<Template>> {
-        connector.get_templates()
+    pub async fn list(connector: &Arc<Gns3Connector>) -> Result<Vec<Template>> {
+        connector.get_templates().await
     }
 
     /// A template by ID (a 404 is an error) or by name (`None` when not found).
-    pub fn find(connector: &Arc<Gns3Connector>, lookup: Lookup<'_>) -> Result<Option<Template>> {
-        connector.get_template(lookup)
+    pub async fn find(connector: &Arc<Gns3Connector>, lookup: Lookup<'_>) -> Result<Option<Template>> {
+        connector.get_template(lookup).await
     }
 
     // ---- helpers ------------------------------------------------------------------------
@@ -160,11 +161,12 @@ impl Template {
     }
 
     /// Connector and template id; resolves `template_id` from `name` when missing.
-    fn require(&mut self) -> Result<(Arc<Gns3Connector>, String)> {
+    async fn require(&mut self) -> Result<(Arc<Gns3Connector>, String)> {
         let conn = self.connector()?;
         if self.template_id.is_none() {
             let found = conn
-                .get_template(Lookup::Name(&self.name))?
+                .get_template(Lookup::Name(&self.name))
+                .await?
                 .ok_or_else(|| Error::not_found(format!("Template not found: {}", self.name)))?;
             self.template_id = found.template_id;
         }
@@ -185,10 +187,11 @@ impl Template {
     // ---- server operations ----------------------------------------------------------------
 
     /// Refreshes the template from the server (by `template_id`, or by `name`).
-    pub fn get(&mut self) -> Result<()> {
-        let (conn, id) = self.require()?;
+    pub async fn get(&mut self) -> Result<()> {
+        let (conn, id) = self.require().await?;
         let fresh = conn
-            .get_template(Lookup::Id(&id))?
+            .get_template(Lookup::Id(&id))
+            .await?
             .ok_or_else(|| Error::not_found(format!("Template not found: {id}")))?;
         self.replace_with(fresh);
         Ok(())
@@ -196,7 +199,7 @@ impl Template {
 
     /// Creates the template on the server; `compute_id` defaults to `"local"` and the call
     /// fails when the name is already used.
-    pub fn create(&mut self) -> Result<()> {
+    pub async fn create(&mut self) -> Result<()> {
         if self.template_id.is_some() {
             return Err(Error::invalid("Template already created"));
         }
@@ -204,26 +207,26 @@ impl Template {
         if self.compute_id.is_none() {
             self.compute_id = Some(LOCAL_COMPUTE.to_string());
         }
-        let created = conn.create_template(self)?;
+        let created = conn.create_template(self).await?;
         self.replace_with(created);
         Ok(())
     }
 
     /// Sends the local template to the server (`PUT`): change [`kind`](Template::kind) and
     /// the other fields locally, then call `save`.
-    pub fn save(&mut self) -> Result<()> {
+    pub async fn save(&mut self) -> Result<()> {
         self.refuse_builtin("modify")?;
-        let (conn, _) = self.require()?;
-        let saved = conn.update_template(self)?;
+        let (conn, _) = self.require().await?;
+        let saved = conn.update_template(self).await?;
         self.replace_with(saved);
         Ok(())
     }
 
     /// Deletes the template on the server and clears `template_id`.
-    pub fn delete(&mut self) -> Result<()> {
+    pub async fn delete(&mut self) -> Result<()> {
         self.refuse_builtin("delete")?;
-        let (conn, id) = self.require()?;
-        conn.call(Method::DELETE, &format!("/templates/{id}"), Body::Empty)?;
+        let (conn, id) = self.require().await?;
+        conn.call(Method::DELETE, &format!("/templates/{id}"), Body::Empty).await?;
         self.template_id = None;
         Ok(())
     }

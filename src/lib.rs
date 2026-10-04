@@ -8,20 +8,21 @@
 //! use std::sync::Arc;
 //! use gns3fy_rs::{Gns3Connector, Lookup, Project};
 //!
-//! # fn main() -> gns3fy_rs::Result<()> {
+//! #[tokio::main]
+//! # async fn main() -> gns3fy_rs::Result<()> {
 //! let server = Arc::new(Gns3Connector::new("http://localhost:3080")?);
 //!
 //! let mut lab = Project::with_connector(server.clone()).with_name("API_TEST");
-//! lab.get()?;
-//! lab.open()?;
+//! lab.get().await?;
+//! lab.open().await?;
 //! println!("{:?} {:?}", lab.status, lab.stats);
 //!
-//! for node in lab.nodes_summary()? {
+//! for node in lab.nodes_summary().await? {
 //!     println!("{node}");
 //! }
 //!
-//! if let Some(node) = lab.get_node_mut(Lookup::Name("alpine-1"))? {
-//!     node.start()?;
+//! if let Some(node) = lab.get_node_mut(Lookup::Name("alpine-1")).await? {
+//!     node.start().await?;
 //! }
 //! # Ok(()) }
 //! ```

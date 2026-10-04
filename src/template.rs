@@ -139,19 +139,12 @@ impl Template {
 
     /// All the templates defined on the server, bound to `connector`.
     pub fn list(connector: &Arc<Gns3Connector>) -> Result<Vec<Template>> {
-        let mut templates = connector.get_templates()?;
-        for t in &mut templates {
-            t.connector = Some(connector.clone());
-        }
-        Ok(templates)
+        connector.get_templates()
     }
 
     /// A template by ID (a 404 is an error) or by name (`None` when not found).
     pub fn find(connector: &Arc<Gns3Connector>, lookup: Lookup<'_>) -> Result<Option<Template>> {
-        Ok(connector.get_template(lookup)?.map(|mut t| {
-            t.connector = Some(connector.clone());
-            t
-        }))
+        connector.get_template(lookup)
     }
 
     // ---- helpers ------------------------------------------------------------------------

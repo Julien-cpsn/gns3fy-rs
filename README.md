@@ -88,8 +88,11 @@ since the server does not allow changing them.
 - **Missing objects are `NotFound` errors** where Python crashed with `IndexError`/`TypeError`/`AttributeError`
   (unknown node name, unknown project name, unknown template...).
 - **No request timeout by default** (as in Python); set one with `.timeout(..)` on the builder.
-- Connector-level calls (`get_projects`, `get_templates`, `get_computes`, ...) return raw `serde_json::Value`
-  like the Python dicts; `Project`/`Node`/`Link` give you typed access.
+- Connector-level calls (`get_projects`, `get_templates`, `get_nodes`, `get_links`, `get_computes`, ...) return
+  typed structs instead of the Python dicts. The `Project`, `Node`, `Link` and `Template` they return already
+  carry the connector, so they can be used directly:
+  `for mut p in connector.get_projects()? { p.delete()?; }`. For that, these methods are called on an
+  `Arc<Gns3Connector>` (`let connector = Arc::new(Gns3Connector::new(url)?);`).
 - `nodes_inventory` returns a name-sorted `BTreeMap` (Python used insertion order).
 
 ## Tests

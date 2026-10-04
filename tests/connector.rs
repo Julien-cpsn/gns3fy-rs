@@ -1,5 +1,7 @@
 mod common;
 
+use std::sync::Arc;
+
 use common::*;
 use gns3fy_rs::{
     Compute, ComputeImage, ComputePorts, Error, Gns3Connector, Link, Lookup, Node, NodeStatus,
@@ -7,8 +9,8 @@ use gns3fy_rs::{
 };
 use serde_json::json;
 
-fn connector(server: &MockServer) -> Gns3Connector {
-    Gns3Connector::new(&server.url).unwrap()
+fn connector(server: &MockServer) -> Arc<Gns3Connector> {
+    Arc::new(Gns3Connector::new(&server.url).unwrap())
 }
 
 fn project_by_name(name: &str) -> Project {
@@ -140,7 +142,7 @@ fn projects_are_typed() {
 
     let all: Vec<Project> = c.get_projects().unwrap();
     assert_eq!(all.len(), 2);
-    assert!(all.iter().all(|p| p.connector.is_none()));
+    assert!(all.iter().all(|p| p.connector.is_some()));
 
     let by_name = c.get_project(Lookup::Name("API_TEST")).unwrap().unwrap();
     assert_eq!(by_name.project_id.as_deref(), Some(PROJECT_ID));
@@ -178,7 +180,7 @@ fn templates_are_typed() {
 
     let all: Vec<Template> = c.get_templates().unwrap();
     assert_eq!(all.len(), 11);
-    assert!(all.iter().all(|t| t.connector.is_none()));
+    assert!(all.iter().all(|t| t.connector.is_some()));
     assert_eq!(all[0].name, "IOU-L3");
     assert_eq!(all[0].template_type(), TemplateType::Iou);
 
@@ -232,7 +234,7 @@ fn template_crud() {
     assert_eq!(sent["image"], "alpine");
     assert!(sent.get("connector").is_none());
     let no_id = Template::new(
-        std::sync::Arc::new(connector(&server)),
+        connector(&server),
         "x",
         TemplateKind::Nat(Default::default()),
     );

@@ -3,6 +3,7 @@
 use std::fmt;
 use std::fs::File;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -42,6 +43,26 @@ impl Body {
         Ok(Body::Json(serde_json::to_string(value)?))
     }
 }
+
+/// Objects that act on the server through a connector.
+///
+/// Everything the connector hands out implements it and is returned with the connector
+/// already attached, so `project.delete()`, `node.start()`... work right away.
+trait HasConnector {
+    fn set_connector(&mut self, connector: Arc<Gns3Connector>);
+}
+
+macro_rules! has_connector {
+    ($($t:ty),+) => {
+        $(impl HasConnector for $t {
+            fn set_connector(&mut self, connector: Arc<Gns3Connector>) {
+                self.connector = Some(connector);
+            }
+        })+
+    };
+}
+
+has_connector!(Project, Node, Link, Template);
 
 /// Error document returned by the GNS3 server.
 #[derive(Debug, Deserialize)]
@@ -292,6 +313,17 @@ impl Gns3Connector {
         self.call_json(Method::GET, path, Body::Empty)
     }
 
+    /// Attaches this connector to an object received from the server.
+    fn bound<T: HasConnector>(self: &Arc<Self>, mut object: T) -> T {
+        object.set_connector(Arc::clone(self));
+        object
+    }
+
+    /// Attaches this connector to every object of a list received from the server.
+    fn bound_all<T: HasConnector>(self: &Arc<Self>, objects: Vec<T>) -> Vec<T> {
+        objects.into_iter().map(|o| self.bound(o)).collect()
+    }
+
     /// Version information of the GNS3 server.
     pub fn get_version(&self) -> Result<Version> {
         self.get_json("/version")
@@ -302,7 +334,8 @@ impl Gns3Connector {
     /// Summary of the projects in the server (with node/link counts from the stats API).
     pub fn projects_summary(&self) -> Result<Vec<ProjectSummary>> {
         let mut out = Vec::new();
-        for p in self.get_projects()? {
+        let projects: Vec<Project> = self.get_json("/projects")?;
+        for p in projects {
             let project_id = p.project_id.unwrap_or_default();
             let stats: ProjectStats = self.get_json(&format!("/projects/{project_id}/stats"))?;
             out.push(ProjectSummary {
@@ -316,16 +349,22 @@ impl Gns3Connector {
         Ok(out)
     }
 
-    /// The projects on the server. The returned objects have no connector assigned; use
-    /// [`Project::with_connector`] to work on one.
-    pub fn get_projects(&self) -> Result<Vec<Project>> {
-        self.get_json("/projects")
+    /// The projects on the server, ready to use: each one carries this connector.
+    ///
+    /// Only the project's own attributes are loaded; call [`Project::get`] to load its
+    /// nodes, links, snapshots...
+    pub fn get_projects(self: &Arc<Self>) -> Result<Vec<Project>> {
+        let projects = self.get_json("/projects")?;
+        Ok(self.bound_all(projects))
     }
 
     /// Retrieves a project by ID (404 is an error) or by name (`None` when not found).
-    pub fn get_project(&self, lookup: Lookup<'_>) -> Result<Option<Project>> {
+    pub fn get_project(self: &Arc<Self>, lookup: Lookup<'_>) -> Result<Option<Project>> {
         match lookup {
-            Lookup::Id(id) => Ok(Some(self.get_json(&format!("/projects/{id}"))?)),
+            Lookup::Id(id) => {
+                let project = self.get_json(&format!("/projects/{id}"))?;
+                Ok(Some(self.bound(project)))
+            }
             Lookup::Name(name) => Ok(self
                 .get_projects()?
                 .into_iter()
@@ -334,11 +373,12 @@ impl Gns3Connector {
     }
 
     /// Creates a project (`name` is required) and returns it as the server stored it.
-    pub fn create_project(&self, project: &Project) -> Result<Project> {
+    pub fn create_project(self: &Arc<Self>, project: &Project) -> Result<Project> {
         if project.name.is_none() {
             return Err(Error::invalid("Parameter 'name' is mandatory"));
         }
-        self.call_json(Method::POST, "/projects", Body::json(project)?)
+        let created = self.call_json(Method::POST, "/projects", Body::json(project)?)?;
+        Ok(self.bound(created))
     }
 
     pub fn delete_project(&self, project_id: &str) -> Result<()> {
@@ -350,8 +390,8 @@ impl Gns3Connector {
 
     /// Summary of the templates in the server.
     pub fn templates_summary(&self) -> Result<Vec<TemplateSummary>> {
-        Ok(self
-            .get_templates()?
+        let templates: Vec<Template> = self.get_json("/templates")?;
+        Ok(templates
             .into_iter()
             .map(|t| TemplateSummary {
                 template_type: t.template_type().to_string(),
@@ -364,23 +404,26 @@ impl Gns3Connector {
             .collect())
     }
 
-    /// The templates defined on the server. The returned objects have no connector
-    /// assigned; [`Template::list`] returns them bound to one.
-    pub fn get_templates(&self) -> Result<Vec<Template>> {
-        self.get_json("/templates")
+    /// The templates defined on the server, ready to use: each one carries this connector.
+    pub fn get_templates(self: &Arc<Self>) -> Result<Vec<Template>> {
+        let templates = self.get_json("/templates")?;
+        Ok(self.bound_all(templates))
     }
 
     /// Retrieves a template by ID (404 is an error) or by name (`None` when not found).
-    pub fn get_template(&self, lookup: Lookup<'_>) -> Result<Option<Template>> {
+    pub fn get_template(self: &Arc<Self>, lookup: Lookup<'_>) -> Result<Option<Template>> {
         match lookup {
-            Lookup::Id(id) => Ok(Some(self.get_json(&format!("/templates/{id}"))?)),
+            Lookup::Id(id) => {
+                let template = self.get_json(&format!("/templates/{id}"))?;
+                Ok(Some(self.bound(template)))
+            }
             Lookup::Name(name) => Ok(self.get_templates()?.into_iter().find(|t| t.name == name)),
         }
     }
 
     /// Creates a template. `compute_id` defaults to `"local"`; fails if a template with the
     /// same name already exists. Returns the template as the server stored it.
-    pub fn create_template(&self, template: &Template) -> Result<Template> {
+    pub fn create_template(self: &Arc<Self>, template: &Template) -> Result<Template> {
         if template.name.is_empty() {
             return Err(Error::invalid("Parameter 'name' is mandatory"));
         }
@@ -395,27 +438,33 @@ impl Gns3Connector {
         if body.compute_id.is_none() {
             body.compute_id = Some(LOCAL_COMPUTE.to_string());
         }
-        self.call_json(Method::POST, "/templates", Body::json(&body)?)
+        let created = self.call_json(Method::POST, "/templates", Body::json(&body)?)?;
+        Ok(self.bound(created))
     }
 
     /// Sends `template` (which needs a `template_id`) to the server and returns the stored
     /// template.
-    pub fn update_template(&self, template: &Template) -> Result<Template> {
+    pub fn update_template(self: &Arc<Self>, template: &Template) -> Result<Template> {
         let id = template
             .template_id
             .as_deref()
             .ok_or_else(|| Error::invalid("Need to submit template_id"))?;
-        self.call_json(Method::PUT, &format!("/templates/{id}"), Body::json(template)?)
+        let saved = self.call_json(Method::PUT, &format!("/templates/{id}"), Body::json(template)?)?;
+        Ok(self.bound(saved))
     }
 
     /// Deletes a template by ID or name.
     pub fn delete_template(&self, lookup: Lookup<'_>) -> Result<()> {
         let id = match lookup {
             Lookup::Id(id) => id.to_string(),
-            Lookup::Name(name) => self
-                .get_template(lookup)?
-                .and_then(|t| t.template_id)
-                .ok_or_else(|| Error::not_found(format!("Template not found: {name}")))?,
+            Lookup::Name(name) => {
+                let templates: Vec<Template> = self.get_json("/templates")?;
+                templates
+                    .into_iter()
+                    .find(|t| t.name == name)
+                    .and_then(|t| t.template_id)
+                    .ok_or_else(|| Error::not_found(format!("Template not found: {name}")))?
+            }
         };
         self.call(Method::DELETE, &format!("/templates/{id}"), Body::Empty)?;
         Ok(())
@@ -423,22 +472,26 @@ impl Gns3Connector {
 
     // ---- nodes and links of a project ----------------------------------------------------
 
-    /// Nodes defined on a project (without connector; see [`Project::get_nodes`]).
-    pub fn get_nodes(&self, project_id: &str) -> Result<Vec<Node>> {
-        self.get_json(&format!("/projects/{project_id}/nodes"))
+    /// Nodes defined on a project, ready to use: each one carries this connector.
+    pub fn get_nodes(self: &Arc<Self>, project_id: &str) -> Result<Vec<Node>> {
+        let nodes = self.get_json(&format!("/projects/{project_id}/nodes"))?;
+        Ok(self.bound_all(nodes))
     }
 
-    pub fn get_node(&self, project_id: &str, node_id: &str) -> Result<Node> {
-        self.get_json(&format!("/projects/{project_id}/nodes/{node_id}"))
+    pub fn get_node(self: &Arc<Self>, project_id: &str, node_id: &str) -> Result<Node> {
+        let node = self.get_json(&format!("/projects/{project_id}/nodes/{node_id}"))?;
+        Ok(self.bound(node))
     }
 
-    /// Links defined on a project (without connector; see [`Project::get_links`]).
-    pub fn get_links(&self, project_id: &str) -> Result<Vec<Link>> {
-        self.get_json(&format!("/projects/{project_id}/links"))
+    /// Links defined on a project, ready to use: each one carries this connector.
+    pub fn get_links(self: &Arc<Self>, project_id: &str) -> Result<Vec<Link>> {
+        let links = self.get_json(&format!("/projects/{project_id}/links"))?;
+        Ok(self.bound_all(links))
     }
 
-    pub fn get_link(&self, project_id: &str, link_id: &str) -> Result<Link> {
-        self.get_json(&format!("/projects/{project_id}/links/{link_id}"))
+    pub fn get_link(self: &Arc<Self>, project_id: &str, link_id: &str) -> Result<Link> {
+        let link = self.get_json(&format!("/projects/{project_id}/links/{link_id}"))?;
+        Ok(self.bound(link))
     }
 
     // ---- computes ------------------------------------------------------------------------

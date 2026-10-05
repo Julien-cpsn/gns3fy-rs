@@ -343,7 +343,6 @@ pub async fn computes_are_typed() {
     tokio::fs::write(&file, b"QCOW-DATA").await.unwrap();
     c.upload_compute_image("qemu", &file, LOCAL_COMPUTE).await.unwrap();
     let rec = server.recorded();
-    dbg!(&rec);
     let up = rec.iter().find(|r| r.method == "POST").unwrap();
     assert_eq!(up.body, "QCOW-DATA");
     assert!(matches!(

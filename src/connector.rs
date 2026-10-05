@@ -1,17 +1,11 @@
 //! Connector to the GNS3 server controller API.
 
 use std::fmt;
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::CONTENT_TYPE;
-use reqwest::{Client, Method, Response};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use crate::compute::{Compute, ComputeImage, ComputePorts};
 use crate::error::{Error, Result};
 use crate::link::Link;
@@ -19,6 +13,12 @@ use crate::node::Node;
 use crate::project::Project;
 use crate::template::Template;
 use crate::types::{Lookup, ProjectStats};
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{Client, Method, Response};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use tokio::fs::File;
+use tokio_util::io::ReaderStream;
 
 /// Name of the default compute.
 pub const LOCAL_COMPUTE: &str = "local";
@@ -271,10 +271,11 @@ impl Gns3Connector {
             Body::Empty => req,
             Body::Json(text) => req.header(CONTENT_TYPE, "application/json").body(text),
             Body::Bytes(b) => req.body(b),
-            Body::File(mut f) => {
-                let mut content = String::new();
-                f.read_to_string(&mut content)?;
-                req.body(content)
+            Body::File(f) => {
+                let len = f.metadata().await?.len();
+                let stream = ReaderStream::new(f);
+                req.header(reqwest::header::CONTENT_LENGTH, len)
+                    .body(reqwest::Body::wrap_stream(stream))
             },
         };
         let response = req.send().await?;
@@ -538,7 +539,7 @@ impl Gns3Connector {
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| Error::invalid("Invalid file name"))?;
-        let file = File::open(path)?;
+        let file = File::open(path).await?;
         self.call(
             Method::POST,
             &format!("/computes/{compute_id}/{emulator}/images/{filename}"),
